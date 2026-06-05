@@ -1,0 +1,14 @@
+C:\Users\mobin\OneDrive\Desktop\ECommerceBot\tools\ECommerceBot.LoadTester\obj\Debug\net9.0\ECommerceBot.LoadTester.GeneratedMSBuildEditorConfig.editorconfig
+C:\Users\mobin\OneDrive\Desktop\ECommerceBot\tools\ECommerceBot.LoadTester\obj\Debug\net9.0\ECommerceBot.LoadTester.AssemblyInfoInputs.cache
+C:\Users\mobin\OneDrive\Desktop\ECommerceBot\tools\ECommerceBot.LoadTester\obj\Debug\net9.0\ECommerceBot.LoadTester.AssemblyInfo.cs
+C:\Users\mobin\OneDrive\Desktop\ECommerceBot\tools\ECommerceBot.LoadTester\obj\Debug\net9.0\ECommerceBot.LoadTester.csproj.CoreCompileInputs.cache
+C:\Users\mobin\OneDrive\Desktop\ECommerceBot\tools\ECommerceBot.LoadTester\bin\Debug\net9.0\ECommerceBot.LoadTester.exe
+C:\Users\mobin\OneDrive\Desktop\ECommerceBot\tools\ECommerceBot.LoadTester\bin\Debug\net9.0\ECommerceBot.LoadTester.deps.json
+C:\Users\mobin\OneDrive\Desktop\ECommerceBot\tools\ECommerceBot.LoadTester\bin\Debug\net9.0\ECommerceBot.LoadTester.runtimeconfig.json
+C:\Users\mobin\OneDrive\Desktop\ECommerceBot\tools\ECommerceBot.LoadTester\bin\Debug\net9.0\ECommerceBot.LoadTester.dll
+C:\Users\mobin\OneDrive\Desktop\ECommerceBot\tools\ECommerceBot.LoadTester\bin\Debug\net9.0\ECommerceBot.LoadTester.pdb
+C:\Users\mobin\OneDrive\Desktop\ECommerceBot\tools\ECommerceBot.LoadTester\obj\Debug\net9.0\ECommerceBot.LoadTester.dll
+C:\Users\mobin\OneDrive\Desktop\ECommerceBot\tools\ECommerceBot.LoadTester\obj\Debug\net9.0\refint\ECommerceBot.LoadTester.dll
+C:\Users\mobin\OneDrive\Desktop\ECommerceBot\tools\ECommerceBot.LoadTester\obj\Debug\net9.0\ECommerceBot.LoadTester.pdb
+C:\Users\mobin\OneDrive\Desktop\ECommerceBot\tools\ECommerceBot.LoadTester\obj\Debug\net9.0\ECommerceBot.LoadTester.genruntimeconfig.cache
+C:\Users\mobin\OneDrive\Desktop\ECommerceBot\tools\ECommerceBot.LoadTester\obj\Debug\net9.0\ref\ECommerceBot.LoadTester.dll
