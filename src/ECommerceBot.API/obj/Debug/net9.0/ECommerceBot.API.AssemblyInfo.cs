@@ -14,7 +14,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyCopyrightAttribute("Copyright © 2026")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+38058e6bcbb977f93c38acd6abeaf17e64b9f05c")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+c61423a59f293b8ca1fb40f40ffd0408ab64ba39")]
 [assembly: System.Reflection.AssemblyProductAttribute("ECommerceBot")]
 [assembly: System.Reflection.AssemblyTitleAttribute("ECommerceBot.API")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]

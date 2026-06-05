@@ -11,16 +11,16 @@ namespace ECommerceBot.API.Controllers;
 [Route("api/telegram")]
 public class TelegramWebhookController : ControllerBase
 {
-    private readonly IUpdateDispatcher _dispatcher;
+    private readonly IServiceScopeFactory _scopeFactory;
     private readonly TelegramOptions _options;
     private readonly ILogger<TelegramWebhookController> _logger;
 
     public TelegramWebhookController(
-        IUpdateDispatcher dispatcher,
+        IServiceScopeFactory scopeFactory,
         IOptions<TelegramOptions> options,
         ILogger<TelegramWebhookController> logger)
     {
-        _dispatcher = dispatcher;
+        _scopeFactory = scopeFactory;
         _options = options.Value;
         _logger = logger;
     }
@@ -40,16 +40,20 @@ public class TelegramWebhookController : ControllerBase
             }
         }
 
-        // Fire-and-forget: return 200 immediately, dispatch in background
+        // Fire-and-forget with a dedicated DI scope so scoped services (UnitOfWork,
+        // DbContext, etc.) are not accessed after the request scope is disposed.
+        var updateId = update.Id;
         _ = Task.Run(async () =>
         {
+            await using var scope = _scopeFactory.CreateAsyncScope();
+            var dispatcher = scope.ServiceProvider.GetRequiredService<IUpdateDispatcher>();
             try
             {
-                await _dispatcher.DispatchAsync(update, CancellationToken.None);
+                await dispatcher.DispatchAsync(update, CancellationToken.None);
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error processing webhook update {UpdateId}", update?.Id);
+                _logger.LogError(ex, "Error processing webhook update {UpdateId}", updateId);
             }
         }, CancellationToken.None);
 
