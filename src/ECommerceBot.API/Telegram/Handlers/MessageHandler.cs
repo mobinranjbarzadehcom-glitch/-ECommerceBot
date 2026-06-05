@@ -353,6 +353,18 @@ public class MessageHandler : IMessageHandler
             case ConversationState.AwaitingLicenseKey:
                 await HandleAdminLicenseKeyInputAsync(message, user, ct);
                 break;
+            case ConversationState.AwaitingProductDescription:
+                await HandleAdminProductDescriptionAsync(message, user, ct);
+                break;
+            case ConversationState.AwaitingProductKeys:
+                await HandleAdminProductKeysAsync(message, user, ct);
+                break;
+            case ConversationState.AwaitingNewAdminTelegramId:
+                await HandleNewAdminTelegramIdAsync(message, user, ct);
+                break;
+            case ConversationState.AwaitingBackupChannelId:
+                await HandleBackupChannelIdAsync(message, user, ct);
+                break;
             default:
                 await _conv.ClearStateAsync(user, ct);
                 await ShowMenuAsync(user, ct);
@@ -499,14 +511,16 @@ public class MessageHandler : IMessageHandler
     {
         var lang = user.PreferredLanguage;
 
-        var pendingOrders = await _texts.GetAsync("AdminMenu.OrdersButton",     lang, "📋 Pending Orders");
-        var users         = await _texts.GetAsync("AdminMenu.UsersButton",      lang, "👥 Users");
-        var products      = await _texts.GetAsync("AdminMenu.ProductsButton",   lang, "📦 Products");
-        var categories    = await _texts.GetAsync("AdminMenu.CategoriesButton", lang, "🗂 Categories");
-        var cards         = await _texts.GetAsync("AdminMenu.CardsButton",      lang, "💳 Cards");
-        var settings      = await _texts.GetAsync("AdminMenu.SettingsButton",   lang, "⚙️ Settings");
-        var stats         = await _texts.GetAsync("AdminMenu.StatisticsButton", lang, "📊 Statistics");
-        var license       = await _texts.GetAsync("AdminMenu.LicenseButton",    lang, "🔐 License Status");
+        var pendingOrders = await _texts.GetAsync("AdminMenu.OrdersButton",     lang, "📋 سفارش‌های در انتظار");
+        var users         = await _texts.GetAsync("AdminMenu.UsersButton",      lang, "👥 کاربران");
+        var products      = await _texts.GetAsync("AdminMenu.ProductsButton",   lang, "📦 محصولات");
+        var categories    = await _texts.GetAsync("AdminMenu.CategoriesButton", lang, "🗂 دسته‌بندی‌ها");
+        var cards         = await _texts.GetAsync("AdminMenu.CardsButton",      lang, "💳 کارت‌های بانکی");
+        var settings      = await _texts.GetAsync("AdminMenu.SettingsButton",   lang, "⚙️ تنظیمات");
+        var stats         = await _texts.GetAsync("AdminMenu.StatisticsButton", lang, "📊 آمار");
+        var admins        = await _texts.GetAsync("AdminMenu.AdminsButton",     lang, "👑 مدیریت ادمین‌ها");
+        var userView      = await _texts.GetAsync("AdminMenu.UserViewButton",   lang, "👁 مشاهده مثل کاربر");
+        var license       = await _texts.GetAsync("AdminMenu.LicenseButton",    lang, "🔐 وضعیت لایسنس");
 
         if (text == pendingOrders) { await ShowAdminPendingOrdersAsync(user, ct); return; }
         if (text == users)         { await ShowAdminUsersAsync(user, ct); return; }
@@ -515,10 +529,12 @@ public class MessageHandler : IMessageHandler
         if (text == cards)         { await ShowAdminCardsAsync(user, ct); return; }
         if (text == settings)      { await ShowAdminSettingsAsync(user, ct); return; }
         if (text == stats)         { await ShowAdminStatsAsync(user, ct); return; }
+        if (text == admins)        { await ShowAdminManagementAsync(user, ct); return; }
+        if (text == userView)      { await ShowUserViewAsync(user, ct); return; }
         if (text == license)       { await ShowAdminLicenseStatusAsync(user, ct); return; }
 
         await _msg.SendHtmlAsync(user.ChatId,
-            await _texts.GetAsync("Admin.UseMenu", lang, "Please use the menu."),
+            await _texts.GetAsync("Admin.UseMenu", lang, "لطفاً از دکمه‌های منو استفاده کنید."),
             await _kb.BuildAdminMenuAsync(lang), ct);
     }
 
@@ -624,24 +640,9 @@ public class MessageHandler : IMessageHandler
 
     private async Task ShowAdminSettingsAsync(TelegramUser user, CancellationToken ct)
     {
-        var lang = user.PreferredLanguage;
-        var keys = new[]
-        {
-            "WelcomeMessage", "HelpMessage", "PaymentInstructionMessage",
-            "MainMenu.ProductsButton", "MainMenu.WalletButton", "MainMenu.OrdersButton",
-            "MainMenu.SupportButton", "MainMenu.HelpButton",
-            "AdminMenu.OrdersButton", "AdminActions.ApproveButton", "AdminActions.RejectButton",
-            "Buttons.CancelButton", "Buttons.BackButton", "Buttons.ConfirmButton",
-            "Errors.Blocked", "Errors.RateLimited", "Errors.PlayerIdEmpty",
-            "Products.NoCategoriesAvailable", "Products.SelectCategory",
-            "Wallet.Title", "Orders.Empty", "Ticket.CreatedSuccess"
-        };
-
-        var html = await _texts.GetAsync("Admin.SettingsTitle", lang, "⚙️ <b>Bot Settings:</b>");
-        var rows = keys.Select(k =>
-            new[] { InlineKeyboardButton.WithCallbackData(k, $"adm:set:{k}") }
-        ).ToList();
-        await _msg.SendHtmlAsync(user.ChatId, html, new InlineKeyboardMarkup(rows), ct);
+        await _msg.SendHtmlAsync(user.ChatId,
+            "⚙️ <b>تنظیمات ربات</b>\n\nدسته‌بندی مورد نظر را انتخاب کنید:",
+            _kb.BuildSettingsCategoriesKeyboard(), ct);
     }
 
     private async Task ShowAdminStatsAsync(TelegramUser user, CancellationToken ct)
@@ -738,23 +739,33 @@ public class MessageHandler : IMessageHandler
         if (string.IsNullOrWhiteSpace(title))
         {
             await _msg.SendHtmlAsync(user.ChatId,
-                await _texts.GetAsync("Admin.Errors.TitleEmpty", lang, "❌ Title cannot be empty."), ct: ct);
+                await _texts.GetAsync("Admin.Errors.TitleEmpty", lang, "❌ عنوان نمی‌تواند خالی باشد."), ct: ct);
             return;
         }
 
-        var ctx = await _conv.GetAdminContextAsync(user);
-        await _conv.ClearStateAsync(user, ct);
+        var ctx = await _conv.GetAdminContextAsync(user) ?? new AdminContext();
 
-        if (ctx?.TargetProductId.HasValue == true)
+        if (ctx.TargetProductId.HasValue)
         {
+            // Edit existing product name
+            await _conv.ClearStateAsync(user, ct);
             var prod = await _uow.Products.GetByIdAsync(ctx.TargetProductId.Value);
             if (prod != null) { prod.Name = title; _uow.Products.Update(prod); await _uow.SaveChangesAsync(ct); }
             await _audit.LogAsync(user.Id, AuditAction.EditProductTitle, "Product", ctx.TargetProductId, $"Title: {title}");
             await _msg.SendHtmlAsync(user.ChatId,
-                await _texts.FormatAsync("Admin.ProductRenamed", lang,
-                    new() { ["title"] = HtmlSanitizer.Encode(title) },
-                    $"✅ Product renamed to <b>{HtmlSanitizer.Encode(title)}</b>."),
+                $"✅ نام محصول به <b>{HtmlSanitizer.Encode(title)}</b> تغییر یافت.",
                 await _kb.BuildAdminMenuAsync(lang), ct);
+        }
+        else if (ctx.PendingAction == "new_product")
+        {
+            // Creation wizard → next step: description
+            ctx.PendingProductTitle = title;
+            await _conv.SetAdminContextAsync(user, ctx, ct);
+            await _conv.SetStateAsync(user, ConversationState.AwaitingProductDescription, ct);
+            await _msg.SendHtmlAsync(user.ChatId,
+                $"✅ عنوان: <b>{HtmlSanitizer.Encode(title)}</b>\n\n" +
+                "📝 توضیحات محصول را وارد کنید:\n<i>(برای رد شدن، دکمه «⏭️ رد شدن» را بزنید)</i>",
+                await _kb.BuildSkipCancelKeyboardAsync(lang), ct);
         }
     }
 
@@ -1004,6 +1015,160 @@ public class MessageHandler : IMessageHandler
                 $"❌ License activation failed.\nError: {result.Message}");
             await _msg.SendHtmlAsync(user.ChatId, failed, await _kb.BuildAdminMenuAsync(lang), ct);
         }
+    }
+
+    // ─── Phase 3: product wizard, admin management, user-view ────────────────
+
+    private async Task HandleAdminProductDescriptionAsync(Message message, TelegramUser user, CancellationToken ct)
+    {
+        var lang = user.PreferredLanguage;
+        var text = message.Text?.Trim();
+        var ctx  = await _conv.GetAdminContextAsync(user) ?? new AdminContext();
+
+        // "⏭️ رد شدن" → skip description
+        ctx.PendingProductDescription = text == "⏭️ رد شدن" ? null : text;
+        await _conv.SetAdminContextAsync(user, ctx, ct);
+        await _conv.SetStateAsync(user, ConversationState.AwaitingProductPrice, ct);
+
+        await _msg.SendHtmlAsync(user.ChatId,
+            "💰 قیمت محصول را وارد کنید (عدد):",
+            await _kb.BuildCancelKeyboardAsync(lang), ct);
+    }
+
+    private async Task HandleAdminProductKeysAsync(Message message, TelegramUser user, CancellationToken ct)
+    {
+        var lang = user.PreferredLanguage;
+        var rawText = message.Text?.Trim();
+        if (string.IsNullOrWhiteSpace(rawText))
+        {
+            await _msg.SendHtmlAsync(user.ChatId, "❌ متنی دریافت نشد.", ct: ct);
+            return;
+        }
+
+        var ctx = await _conv.GetAdminContextAsync(user);
+        await _conv.ClearStateAsync(user, ct);
+
+        if (ctx?.TargetProductId is null) return;
+
+        var lines = rawText
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Where(l => !string.IsNullOrWhiteSpace(l))
+            .Distinct()
+            .ToList();
+
+        if (lines.Count == 0)
+        {
+            await _msg.SendHtmlAsync(user.ChatId, "❌ هیچ کلیدی یافت نشد.", ct: ct);
+            return;
+        }
+
+        var newKeys = lines.Select(k => new ProductKey
+        {
+            ProductId = ctx.TargetProductId.Value,
+            KeyValue  = k,
+            IsUsed    = false
+        }).ToList();
+
+        await _uow.ProductKeys.AddRangeAsync(newKeys);
+        await _uow.SaveChangesAsync(ct);
+        await _audit.LogAsync(user.Id, AuditAction.AddProduct, "ProductKey", ctx.TargetProductId,
+            $"{newKeys.Count} کلید اضافه شد");
+
+        await _msg.SendHtmlAsync(user.ChatId,
+            $"✅ <b>{newKeys.Count}</b> کلید برای محصول ثبت شد.",
+            await _kb.BuildAdminMenuAsync(lang), ct);
+    }
+
+    private async Task ShowAdminManagementAsync(TelegramUser user, CancellationToken ct)
+    {
+        var admins = (await _uow.Users.GetAdminsAsync()).ToList();
+        var html   = $"👑 <b>مدیریت ادمین‌ها</b>\n\nتعداد فعلی: <b>{admins.Count}</b>\n";
+        var rows   = new List<InlineKeyboardButton[]>();
+
+        foreach (var a in admins)
+        {
+            var label = $"👤 {a.FirstName}";
+            if (!string.IsNullOrEmpty(a.Username)) label += $" (@{a.Username})";
+            rows.Add(new[] { InlineKeyboardButton.WithCallbackData(label, $"adm:mgr:{a.Id}") });
+        }
+
+        rows.Add(new[] { InlineKeyboardButton.WithCallbackData("➕ افزودن ادمین", "adm:mgr:add") });
+        await _msg.SendHtmlAsync(user.ChatId, html, new InlineKeyboardMarkup(rows), ct);
+    }
+
+    private async Task HandleNewAdminTelegramIdAsync(Message message, TelegramUser user, CancellationToken ct)
+    {
+        var lang  = user.PreferredLanguage;
+        var input = message.Text?.Trim();
+        await _conv.ClearStateAsync(user, ct);
+
+        if (!long.TryParse(input, out var telegramId))
+        {
+            await _msg.SendHtmlAsync(user.ChatId,
+                "❌ شناسه تلگرام باید یک عدد باشد.", await _kb.BuildAdminMenuAsync(lang), ct);
+            return;
+        }
+
+        var target = await _uow.Users.GetByTelegramIdAsync(telegramId);
+        if (target is null)
+        {
+            await _msg.SendHtmlAsync(user.ChatId,
+                $"❌ کاربری با شناسه <code>{telegramId}</code> در این ربات یافت نشد.\n" +
+                "ابتدا باید یک بار /start را برای ربات ارسال کرده باشد.",
+                await _kb.BuildAdminMenuAsync(lang), ct);
+            return;
+        }
+
+        if (target.Role == UserRole.Admin)
+        {
+            await _msg.SendHtmlAsync(user.ChatId,
+                $"ℹ️ کاربر <b>{HtmlSanitizer.Encode(target.FirstName)}</b> از قبل ادمین است.",
+                await _kb.BuildAdminMenuAsync(lang), ct);
+            return;
+        }
+
+        target.Role = UserRole.Admin;
+        _uow.Users.Update(target);
+        await _uow.SaveChangesAsync(ct);
+        await _audit.LogAsync(user.Id, AuditAction.EditUser, "TelegramUser", target.Id, "Role set to Admin");
+
+        await _msg.SendHtmlAsync(user.ChatId,
+            $"✅ کاربر <b>{HtmlSanitizer.Encode(target.FirstName)}</b> به ادمین ارتقا یافت.",
+            await _kb.BuildAdminMenuAsync(lang), ct);
+
+        if (target.ChatId > 0)
+            await _msg.SendHtmlAsync(target.ChatId,
+                "👑 شما به عنوان ادمین این ربات تنظیم شدید. برای مشاهده منوی ادمین /start بزنید.", ct: ct);
+    }
+
+    private async Task HandleBackupChannelIdAsync(Message message, TelegramUser user, CancellationToken ct)
+    {
+        var lang  = user.PreferredLanguage;
+        var input = message.Text?.Trim();
+        await _conv.ClearStateAsync(user, ct);
+
+        if (!long.TryParse(input, out _))
+        {
+            await _msg.SendHtmlAsync(user.ChatId,
+                "❌ شناسه کانال باید یک عدد باشد (مثلاً -100123456789).",
+                await _kb.BuildAdminMenuAsync(lang), ct);
+            return;
+        }
+
+        await _texts.SetAsync("BackupChannelId", input!);
+        await _msg.SendHtmlAsync(user.ChatId,
+            $"✅ شناسه کانال بکاپ تنظیم شد: <code>{HtmlSanitizer.Encode(input!)}</code>",
+            await _kb.BuildAdminMenuAsync(lang), ct);
+    }
+
+    private async Task ShowUserViewAsync(TelegramUser user, CancellationToken ct)
+    {
+        var lang = user.PreferredLanguage;
+        var kb   = await _kb.BuildMainMenuAsync(lang);
+        await _msg.SendHtmlAsync(user.ChatId,
+            "👁 <b>مشاهده مثل کاربر</b>\n\nمنوی زیر همان چیزی است که کاربران می‌بینند.\n" +
+            "برای بازگشت به پنل ادمین، /start بزنید.",
+            kb, ct);
     }
 
     // ─── Helpers ─────────────────────────────────────────────────────────────

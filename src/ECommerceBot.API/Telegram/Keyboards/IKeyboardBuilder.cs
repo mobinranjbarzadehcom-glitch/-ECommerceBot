@@ -13,4 +13,8 @@ public interface IKeyboardBuilder
     Task<InlineKeyboardMarkup> BuildConfirmKeyboardAsync(string confirmData, string cancelData = "menu:main", string lang = "fa");
     Task<InlineKeyboardMarkup> BuildLicenseActionsKeyboardAsync(string lang = "fa");
     Task<ReplyKeyboardMarkup> BuildCancelKeyboardAsync(string lang = "fa");
+    Task<ReplyKeyboardMarkup> BuildSkipCancelKeyboardAsync(string lang = "fa");
+    InlineKeyboardMarkup BuildSettingsCategoriesKeyboard();
+    InlineKeyboardMarkup BuildSettingsByCategoryKeyboard(string category);
+    InlineKeyboardMarkup BuildCategoryPickerKeyboard(IEnumerable<(int Id, string Name)> categories, string callbackPrefix);
 }

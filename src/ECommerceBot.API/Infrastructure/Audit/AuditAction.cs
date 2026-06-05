@@ -26,4 +26,7 @@ public static class AuditAction
     public const string AddAdminNote = "AddAdminNote";
     public const string ExpireOrder = "ExpireOrder";
     public const string LicenseActivated = "LicenseActivated";
+    public const string EditUser = "EditUser";
+    public const string AddAdminRole = "AddAdminRole";
+    public const string RemoveAdminRole = "RemoveAdminRole";
 }

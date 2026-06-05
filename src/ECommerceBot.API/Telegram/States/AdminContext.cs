@@ -9,4 +9,9 @@ public class AdminContext
     public int? TargetCardId { get; set; }
     public string? TargetSettingKey { get; set; }
     public string? PendingAction { get; set; }
+
+    // Product creation wizard
+    public string? PendingProductTitle { get; set; }
+    public string? PendingProductDescription { get; set; }
+    public decimal? PendingProductPrice { get; set; }
 }

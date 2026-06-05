@@ -1,5 +1,6 @@
 using ECommerceBot.API.Telegram.Services;
 using Telegram.Bot.Types.ReplyMarkups;
+using static ECommerceBot.API.Telegram.Services.SettingsCatalog;
 
 namespace ECommerceBot.API.Telegram.Keyboards;
 
@@ -30,21 +31,24 @@ public class KeyboardBuilder : IKeyboardBuilder
 
     public async Task<ReplyKeyboardMarkup> BuildAdminMenuAsync(string lang = "fa")
     {
-        var orders     = await _texts.GetAsync("AdminMenu.OrdersButton",     lang, "📋 Pending Orders");
-        var users      = await _texts.GetAsync("AdminMenu.UsersButton",      lang, "👥 Users");
-        var products   = await _texts.GetAsync("AdminMenu.ProductsButton",   lang, "📦 Products");
-        var categories = await _texts.GetAsync("AdminMenu.CategoriesButton", lang, "🗂 Categories");
-        var cards      = await _texts.GetAsync("AdminMenu.CardsButton",      lang, "💳 Cards");
-        var settings   = await _texts.GetAsync("AdminMenu.SettingsButton",   lang, "⚙️ Settings");
-        var stats      = await _texts.GetAsync("AdminMenu.StatisticsButton", lang, "📊 Statistics");
-        var license    = await _texts.GetAsync("AdminMenu.LicenseButton",    lang, "🔐 License Status");
+        var orders     = await _texts.GetAsync("AdminMenu.OrdersButton",     lang, "📋 سفارش‌های در انتظار");
+        var users      = await _texts.GetAsync("AdminMenu.UsersButton",      lang, "👥 کاربران");
+        var products   = await _texts.GetAsync("AdminMenu.ProductsButton",   lang, "📦 محصولات");
+        var categories = await _texts.GetAsync("AdminMenu.CategoriesButton", lang, "🗂 دسته‌بندی‌ها");
+        var cards      = await _texts.GetAsync("AdminMenu.CardsButton",      lang, "💳 کارت‌های بانکی");
+        var settings   = await _texts.GetAsync("AdminMenu.SettingsButton",   lang, "⚙️ تنظیمات");
+        var stats      = await _texts.GetAsync("AdminMenu.StatisticsButton", lang, "📊 آمار");
+        var admins     = await _texts.GetAsync("AdminMenu.AdminsButton",     lang, "👑 مدیریت ادمین‌ها");
+        var userView   = await _texts.GetAsync("AdminMenu.UserViewButton",   lang, "👁 مشاهده مثل کاربر");
+        var license    = await _texts.GetAsync("AdminMenu.LicenseButton",    lang, "🔐 وضعیت لایسنس");
 
         return new ReplyKeyboardMarkup(new[]
         {
             new[] { new KeyboardButton(orders),   new KeyboardButton(users) },
             new[] { new KeyboardButton(products), new KeyboardButton(categories) },
-            new[] { new KeyboardButton(cards),    new KeyboardButton(settings), new KeyboardButton(stats) },
-            new[] { new KeyboardButton(license) }
+            new[] { new KeyboardButton(cards),    new KeyboardButton(settings) },
+            new[] { new KeyboardButton(stats),    new KeyboardButton(admins) },
+            new[] { new KeyboardButton(userView), new KeyboardButton(license) }
         })
         { ResizeKeyboard = true };
     }
@@ -127,7 +131,49 @@ public class KeyboardBuilder : IKeyboardBuilder
 
     public async Task<ReplyKeyboardMarkup> BuildCancelKeyboardAsync(string lang = "fa")
     {
-        var cancel = await _texts.GetAsync("Buttons.CancelButton", lang, "❌ Cancel");
+        var cancel = await _texts.GetAsync("Buttons.CancelButton", lang, "❌ لغو");
         return new ReplyKeyboardMarkup(cancel) { ResizeKeyboard = true };
+    }
+
+    public async Task<ReplyKeyboardMarkup> BuildSkipCancelKeyboardAsync(string lang = "fa")
+    {
+        var cancel = await _texts.GetAsync("Buttons.CancelButton", lang, "❌ لغو");
+        return new ReplyKeyboardMarkup(new[]
+        {
+            new[] { new KeyboardButton("⏭️ رد شدن"), new KeyboardButton(cancel) }
+        })
+        { ResizeKeyboard = true };
+    }
+
+    public InlineKeyboardMarkup BuildSettingsCategoriesKeyboard()
+    {
+        var rows = SettingsCatalog.Categories
+            .Select(cat => new[]
+            {
+                InlineKeyboardButton.WithCallbackData(cat, $"adm:set:cat:{Uri.EscapeDataString(cat)}")
+            })
+            .ToList();
+        return new InlineKeyboardMarkup(rows);
+    }
+
+    public InlineKeyboardMarkup BuildSettingsByCategoryKeyboard(string category)
+    {
+        var rows = SettingsCatalog.GetByCategory(category)
+            .Select(kvp => new[]
+            {
+                InlineKeyboardButton.WithCallbackData(kvp.Value.PersianLabel, $"adm:set:{kvp.Key}")
+            })
+            .ToList();
+        rows.Add(new[] { InlineKeyboardButton.WithCallbackData("⬅️ بازگشت", "adm:set:cats") });
+        return new InlineKeyboardMarkup(rows);
+    }
+
+    public InlineKeyboardMarkup BuildCategoryPickerKeyboard(
+        IEnumerable<(int Id, string Name)> categories, string callbackPrefix)
+    {
+        var rows = categories
+            .Select(c => new[] { InlineKeyboardButton.WithCallbackData(c.Name, $"{callbackPrefix}:{c.Id}") })
+            .ToList();
+        return new InlineKeyboardMarkup(rows);
     }
 }

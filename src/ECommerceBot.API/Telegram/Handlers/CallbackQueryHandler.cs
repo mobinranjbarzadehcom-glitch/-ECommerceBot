@@ -413,7 +413,8 @@ public class CallbackQueryHandler : ICallbackQueryHandler
             case "cat":  await HandleAdminCatCallbackAsync(idStr, parts, user, chatId, ct); break;
             case "prod": await HandleAdminProdCallbackAsync(idStr, parts, user, chatId, ct); break;
             case "card": await HandleAdminCardCallbackAsync(idStr, parts, user, chatId, ct); break;
-            case "set":  await HandleAdminSettingCallbackAsync(idStr, user, chatId, ct); break;
+            case "set":  await HandleAdminSettingCallbackAsync(idStr, parts, user, chatId, ct); break;
+            case "mgr":  await HandleAdminManagementCallbackAsync(idStr, parts, user, chatId, ct); break;
         }
     }
 
@@ -493,9 +494,18 @@ public class CallbackQueryHandler : ICallbackQueryHandler
 
         if (idStr == "add")
         {
+            await _conv.SetAdminContextAsync(user, new AdminContext { PendingAction = "new_product" }, ct);
+            await _conv.SetStateAsync(user, ConversationState.AwaitingProductTitle, ct);
             await _msg.SendHtmlAsync(chatId,
-                await _texts.GetAsync("Admin.ProdAddInfo", lang,
-                    "ℹ️ To add a product, please use the web CMS. Telegram-based product creation coming soon."), ct: ct);
+                "➕ <b>افزودن محصول جدید</b>\n\n📝 عنوان محصول را وارد کنید:",
+                await _kb.BuildCancelKeyboardAsync(lang), ct);
+            return;
+        }
+
+        // adm:prod:new:cat:{catId} — final step of creation wizard (category selected)
+        if (idStr == "new" && parts.ElementAtOrDefault(3) == "cat")
+        {
+            await HandleProductWizardCategoryAsync(parts, user, chatId, ct);
             return;
         }
 
@@ -515,18 +525,27 @@ public class CallbackQueryHandler : ICallbackQueryHandler
                 await _conv.SetAdminContextAsync(user, new AdminContext { TargetProductId = prodId }, ct);
                 await _conv.SetStateAsync(user, ConversationState.AwaitingProductTitle, ct);
                 await _msg.SendHtmlAsync(chatId,
-                    await _texts.FormatAsync("Admin.ProdEnterTitle", lang,
-                        new() { ["name"] = product.Name },
-                        $"📝 Enter new title for <b>{product.Name}</b>:"), ct: ct);
+                    $"📝 نام جدید برای <b>{HtmlSanitizer.Encode(product.Name)}</b> را وارد کنید:",
+                    await _kb.BuildCancelKeyboardAsync(lang), ct);
                 break;
 
             case "price":
                 await _conv.SetAdminContextAsync(user, new AdminContext { TargetProductId = prodId }, ct);
                 await _conv.SetStateAsync(user, ConversationState.AwaitingProductPrice, ct);
                 await _msg.SendHtmlAsync(chatId,
-                    await _texts.FormatAsync("Admin.ProdEnterPrice", lang,
-                        new() { ["name"] = product.Name },
-                        $"💰 Enter new price for <b>{product.Name}</b>:"), ct: ct);
+                    $"💰 قیمت جدید برای <b>{HtmlSanitizer.Encode(product.Name)}</b> را وارد کنید:",
+                    await _kb.BuildCancelKeyboardAsync(lang), ct);
+                break;
+
+            case "keys":
+                await _conv.SetAdminContextAsync(user, new AdminContext { TargetProductId = prodId }, ct);
+                await _conv.SetStateAsync(user, ConversationState.AwaitingProductKeys, ct);
+                var existingCount = await _uow.Products.GetAvailableKeyCountAsync(prodId);
+                await _msg.SendHtmlAsync(chatId,
+                    $"🔑 <b>افزودن کلید به {HtmlSanitizer.Encode(product.Name)}</b>\n\n" +
+                    $"کلیدهای موجود: <b>{existingCount}</b>\n\n" +
+                    "کلیدهای جدید را وارد کنید (هر کلید در یک خط):",
+                    await _kb.BuildCancelKeyboardAsync(lang), ct);
                 break;
 
             case "toggle":
@@ -536,26 +555,33 @@ public class CallbackQueryHandler : ICallbackQueryHandler
                 await _audit.LogAsync(user.Id,
                     product.Status == ProductStatus.Active ? AuditAction.EnableProduct : AuditAction.DisableProduct,
                     "Product", prodId);
+                var statusFa = product.Status == ProductStatus.Active ? "فعال" : "غیرفعال";
                 await _msg.SendHtmlAsync(chatId,
-                    await _texts.FormatAsync("Admin.ProdToggled", lang,
-                        new() { ["name"] = HtmlSanitizer.Encode(product.Name), ["status"] = product.Status.ToString() },
-                        $"✅ Product <b>{HtmlSanitizer.Encode(product.Name)}</b> is now {product.Status}."), ct: ct);
+                    $"✅ محصول <b>{HtmlSanitizer.Encode(product.Name)}</b> اکنون {statusFa} است.", ct: ct);
                 break;
 
             default:
-                var keys = await _uow.Products.GetAvailableKeyCountAsync(prodId);
-                var html = $"📦 <b>{product.Name}</b>\n💰 {product.Price:F2}$\n🔑 Keys: {keys}\nStatus: {product.Status}";
-                var renameBtn  = await _texts.GetAsync("Admin.ProdRenameButton",  lang, "✏️ Rename");
-                var priceBtn   = await _texts.GetAsync("Admin.ProdPriceButton",   lang, "💰 Price");
-                var toggleBtn  = product.Status == ProductStatus.Active
-                    ? await _texts.GetAsync("Admin.ProdDisableButton", lang, "🔴 Disable")
-                    : await _texts.GetAsync("Admin.ProdEnableButton",  lang, "🟢 Enable");
-                var kb = new InlineKeyboardMarkup(new[]
+                var keyCount = await _uow.Products.GetAvailableKeyCountAsync(prodId);
+                var detail = $"📦 <b>{HtmlSanitizer.Encode(product.Name)}</b>\n" +
+                             $"💰 {product.Price:F2} تومان\n" +
+                             $"🔑 کلیدهای موجود: {keyCount}\n" +
+                             $"📊 وضعیت: {(product.Status == ProductStatus.Active ? "✅ فعال" : "❌ غیرفعال")}";
+                var prodKb = new InlineKeyboardMarkup(new[]
                 {
-                    new[] { InlineKeyboardButton.WithCallbackData(renameBtn, $"adm:prod:{prodId}:rename"), InlineKeyboardButton.WithCallbackData(priceBtn, $"adm:prod:{prodId}:price") },
-                    new[] { InlineKeyboardButton.WithCallbackData(toggleBtn, $"adm:prod:{prodId}:toggle") }
+                    new[]
+                    {
+                        InlineKeyboardButton.WithCallbackData("✏️ تغییر نام",   $"adm:prod:{prodId}:rename"),
+                        InlineKeyboardButton.WithCallbackData("💰 تغییر قیمت",  $"adm:prod:{prodId}:price")
+                    },
+                    new[]
+                    {
+                        InlineKeyboardButton.WithCallbackData("🔑 افزودن کلید", $"adm:prod:{prodId}:keys"),
+                        InlineKeyboardButton.WithCallbackData(
+                            product.Status == ProductStatus.Active ? "🔴 غیرفعال" : "🟢 فعال",
+                            $"adm:prod:{prodId}:toggle")
+                    }
                 });
-                await _msg.SendHtmlAsync(chatId, html, kb, ct);
+                await _msg.SendHtmlAsync(chatId, detail, prodKb, ct);
                 break;
         }
     }
@@ -626,30 +652,142 @@ public class CallbackQueryHandler : ICallbackQueryHandler
         }
     }
 
-    private async Task HandleAdminSettingCallbackAsync(string? key, TelegramUser user, long chatId, CancellationToken ct)
+    private async Task HandleAdminSettingCallbackAsync(string? idStr, string[] parts, TelegramUser user, long chatId, CancellationToken ct)
     {
         var lang = user.PreferredLanguage;
 
-        if (key == "list")
+        // adm:set:cats — show category list
+        if (idStr == "cats")
         {
-            var keys = new[] { "WelcomeMessage", "HelpMessage", "PaymentInstructionMessage", "MainMenu.ProductsButton",
-                               "MainMenu.WalletButton", "MainMenu.OrdersButton", "MainMenu.SupportButton", "MainMenu.HelpButton",
-                               "Buttons.CancelButton", "Buttons.BackButton" };
-            var rows = keys.Select(k => new[] { InlineKeyboardButton.WithCallbackData(k, $"adm:set:{k}") }).ToList();
             await _msg.SendHtmlAsync(chatId,
-                await _texts.GetAsync("Admin.SettingSelectPrompt", lang, "⚙️ Select a setting to edit:"),
-                new InlineKeyboardMarkup(rows), ct);
+                "⚙️ <b>تنظیمات ربات</b>\n\nدسته‌بندی مورد نظر را انتخاب کنید:",
+                _kb.BuildSettingsCategoriesKeyboard(), ct);
             return;
         }
 
+        // adm:set:cat:{encoded-category} — show settings in that category
+        if (idStr == "cat")
+        {
+            var encoded  = parts.ElementAtOrDefault(3) ?? string.Empty;
+            var category = Uri.UnescapeDataString(encoded);
+            await _msg.SendHtmlAsync(chatId,
+                $"⚙️ <b>{category}</b>\n\nتنظیم مورد نظر را انتخاب کنید:",
+                _kb.BuildSettingsByCategoryKeyboard(category), ct);
+            return;
+        }
+
+        // adm:set:{key} — edit that specific setting
+        var key = idStr;
         if (string.IsNullOrEmpty(key)) return;
 
-        var current = await _texts.GetAsync(key, lang, "—");
+        var current   = await _texts.GetAsync(key, lang, "—");
+        var persianLabel = SettingsCatalog.GetLabel(key);
+
         await _conv.SetAdminContextAsync(user, new AdminContext { TargetSettingKey = key }, ct);
         await _conv.SetStateAsync(user, ConversationState.AwaitingSettingValue, ct);
         await _msg.SendHtmlAsync(chatId,
-            await _texts.FormatAsync("Admin.SettingEditPrompt", lang,
-                new() { ["key"] = key, ["current"] = current },
-                $"⚙️ <b>Editing:</b> <code>{key}</code>\n\nCurrent value:\n{current}\n\nSend new value:"), ct: ct);
+            $"⚙️ <b>ویرایش: {persianLabel}</b>\n\n" +
+            $"مقدار فعلی:\n{current}\n\n" +
+            "مقدار جدید را وارد کنید:", ct: ct);
+    }
+
+    private async Task HandleAdminManagementCallbackAsync(string? idStr, string[] parts, TelegramUser user, long chatId, CancellationToken ct)
+    {
+        var lang = user.PreferredLanguage;
+
+        if (idStr == "add")
+        {
+            await _conv.SetStateAsync(user, ConversationState.AwaitingNewAdminTelegramId, ct);
+            await _msg.SendHtmlAsync(chatId,
+                "👑 <b>افزودن ادمین</b>\n\nشناسه عددی تلگرام کاربر را وارد کنید:\n" +
+                "<i>(کاربر باید قبلاً /start را ارسال کرده باشد)</i>",
+                await _kb.BuildCancelKeyboardAsync(lang), ct);
+            return;
+        }
+
+        if (!int.TryParse(idStr, out var userId)) return;
+        var target = await _uow.Users.GetByIdAsync(userId);
+        if (target is null) { await _msg.SendHtmlAsync(chatId, "❌ کاربر یافت نشد.", null, ct); return; }
+
+        var action = parts.ElementAtOrDefault(3);
+        if (action == "remove")
+        {
+            if (target.TelegramId == user.TelegramId)
+            {
+                await _msg.SendHtmlAsync(chatId, "❌ نمی‌توانید دسترسی ادمین خود را حذف کنید.", null, ct);
+                return;
+            }
+            target.Role = UserRole.Customer;
+            _uow.Users.Update(target);
+            await _uow.SaveChangesAsync(ct);
+            await _audit.LogAsync(user.Id, AuditAction.EditUser, "TelegramUser", userId, "Admin role removed");
+            await _msg.SendHtmlAsync(chatId,
+                $"✅ دسترسی ادمین <b>{HtmlSanitizer.Encode(target.FirstName)}</b> حذف شد.", null, ct);
+            return;
+        }
+
+        // Default: show admin detail card
+        var html = $"👤 <b>{HtmlSanitizer.Encode(target.FirstName)}</b>\n" +
+                   (!string.IsNullOrEmpty(target.Username) ? $"@{HtmlSanitizer.Encode(target.Username)}\n" : "") +
+                   $"🆔 TelegramId: <code>{target.TelegramId}</code>\n" +
+                   $"📅 عضو از: {target.CreatedAt:yyyy-MM-dd}";
+
+        var kb = new InlineKeyboardMarkup(new[]
+        {
+            new[] { InlineKeyboardButton.WithCallbackData("🗑 حذف دسترسی ادمین", $"adm:mgr:{userId}:remove") },
+            new[] { InlineKeyboardButton.WithCallbackData("⬅️ بازگشت", "adm:mgr:list") }
+        });
+        await _msg.SendHtmlAsync(chatId, html, kb, ct);
+    }
+
+    private async Task HandleProductWizardCategoryAsync(string[] parts, TelegramUser user, long chatId, CancellationToken ct)
+    {
+        var lang = user.PreferredLanguage;
+
+        if (!int.TryParse(parts.ElementAtOrDefault(4), out var catId)) return;
+
+        var ctx = await _conv.GetAdminContextAsync(user);
+        if (ctx?.PendingAction != "new_product" || ctx.PendingProductTitle is null || ctx.PendingProductPrice is null)
+        {
+            await _conv.ClearStateAsync(user, ct);
+            await _msg.SendHtmlAsync(chatId, "❌ اطلاعات ویزارد منقضی شده. دوباره شروع کنید.", null, ct);
+            return;
+        }
+
+        var category = await _uow.Categories.GetByIdAsync(catId);
+        if (category is null)
+        {
+            await _msg.SendHtmlAsync(chatId, "❌ دسته‌بندی یافت نشد.", null, ct);
+            return;
+        }
+
+        var product = new Product
+        {
+            Name        = ctx.PendingProductTitle,
+            Description = ctx.PendingProductDescription,
+            Price       = ctx.PendingProductPrice.Value,
+            CategoryId  = catId,
+            Status      = ProductStatus.Active,
+        };
+
+        await _uow.Products.AddAsync(product);
+        await _uow.SaveChangesAsync(ct);
+        await _audit.LogAsync(user.Id, AuditAction.AddProduct, "Product", product.Id,
+            $"Name={product.Name}, Price={product.Price:F2}, Cat={catId}");
+
+        await _conv.ClearStateAsync(user, ct);
+
+        await _msg.SendHtmlAsync(chatId,
+            $"🎉 <b>محصول با موفقیت ایجاد شد!</b>\n\n" +
+            $"📦 نام: <b>{HtmlSanitizer.Encode(product.Name)}</b>\n" +
+            $"💰 قیمت: {product.Price:F2} تومان\n" +
+            $"🗂 دسته‌بندی: {HtmlSanitizer.Encode(category.Name)}\n" +
+            $"🆔 شناسه: #{product.Id}\n\n" +
+            "برای افزودن کلید/لایسنس، روی محصول در لیست کلیک کنید.",
+            new InlineKeyboardMarkup(new[]
+            {
+                new[] { InlineKeyboardButton.WithCallbackData("🔑 افزودن کلید", $"adm:prod:{product.Id}:keys") },
+                new[] { InlineKeyboardButton.WithCallbackData("⬅️ بازگشت به محصولات", "adm:prod:list") }
+            }), ct);
     }
 }

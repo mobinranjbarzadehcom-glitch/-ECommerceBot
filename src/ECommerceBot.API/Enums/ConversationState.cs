@@ -21,5 +21,15 @@ public enum ConversationState
     AwaitingCardBank = 18,
 
     // License states
-    AwaitingLicenseKey = 20
+    AwaitingLicenseKey = 20,
+
+    // Product creation wizard
+    AwaitingProductDescription = 30,
+    AwaitingProductKeys = 31,
+
+    // Admin management
+    AwaitingNewAdminTelegramId = 40,
+
+    // Backup channel
+    AwaitingBackupChannelId = 50,
 }
