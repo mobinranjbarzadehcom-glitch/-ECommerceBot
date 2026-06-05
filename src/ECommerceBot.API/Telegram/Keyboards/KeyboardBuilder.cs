@@ -12,13 +12,13 @@ public class KeyboardBuilder : IKeyboardBuilder
         _texts = texts;
     }
 
-    public async Task<ReplyKeyboardMarkup> BuildMainMenuAsync()
+    public async Task<ReplyKeyboardMarkup> BuildMainMenuAsync(string lang = "fa")
     {
-        var products = await _texts.GetAsync("MainMenu.ProductsButton", "🛒 Products");
-        var wallet = await _texts.GetAsync("MainMenu.WalletButton", "💰 Wallet");
-        var orders = await _texts.GetAsync("MainMenu.OrdersButton", "📦 Orders");
-        var support = await _texts.GetAsync("MainMenu.SupportButton", "🎫 Support");
-        var help = await _texts.GetAsync("MainMenu.HelpButton", "❓ Help");
+        var products = await _texts.GetAsync("MainMenu.ProductsButton", lang, "🛒 Products");
+        var wallet   = await _texts.GetAsync("MainMenu.WalletButton",   lang, "💰 Wallet");
+        var orders   = await _texts.GetAsync("MainMenu.OrdersButton",   lang, "📦 Orders");
+        var support  = await _texts.GetAsync("MainMenu.SupportButton",  lang, "🎫 Support");
+        var help     = await _texts.GetAsync("MainMenu.HelpButton",     lang, "❓ Help");
 
         return new ReplyKeyboardMarkup(new[]
         {
@@ -28,23 +28,22 @@ public class KeyboardBuilder : IKeyboardBuilder
         { ResizeKeyboard = true };
     }
 
-    public async Task<ReplyKeyboardMarkup> BuildAdminMenuAsync()
+    public async Task<ReplyKeyboardMarkup> BuildAdminMenuAsync(string lang = "fa")
     {
-        var orders = await _texts.GetAsync("AdminMenu.OrdersButton", "📋 Pending Orders");
-        var users = await _texts.GetAsync("AdminMenu.UsersButton", "👥 Users");
-        var products = await _texts.GetAsync("AdminMenu.ProductsButton", "📦 Products");
-        var categories = await _texts.GetAsync("AdminMenu.CategoriesButton", "🗂 Categories");
-        var cards = await _texts.GetAsync("AdminMenu.CardsButton", "💳 Cards");
-        var settings = await _texts.GetAsync("AdminMenu.SettingsButton", "⚙️ Settings");
-        var stats = await _texts.GetAsync("AdminMenu.StatisticsButton", "📊 Statistics");
-
-        var license = await _texts.GetAsync("AdminMenu.LicenseButton", "🔐 وضعیت لایسنس");
+        var orders     = await _texts.GetAsync("AdminMenu.OrdersButton",     lang, "📋 Pending Orders");
+        var users      = await _texts.GetAsync("AdminMenu.UsersButton",      lang, "👥 Users");
+        var products   = await _texts.GetAsync("AdminMenu.ProductsButton",   lang, "📦 Products");
+        var categories = await _texts.GetAsync("AdminMenu.CategoriesButton", lang, "🗂 Categories");
+        var cards      = await _texts.GetAsync("AdminMenu.CardsButton",      lang, "💳 Cards");
+        var settings   = await _texts.GetAsync("AdminMenu.SettingsButton",   lang, "⚙️ Settings");
+        var stats      = await _texts.GetAsync("AdminMenu.StatisticsButton", lang, "📊 Statistics");
+        var license    = await _texts.GetAsync("AdminMenu.LicenseButton",    lang, "🔐 License Status");
 
         return new ReplyKeyboardMarkup(new[]
         {
-            new[] { new KeyboardButton(orders), new KeyboardButton(users) },
+            new[] { new KeyboardButton(orders),   new KeyboardButton(users) },
             new[] { new KeyboardButton(products), new KeyboardButton(categories) },
-            new[] { new KeyboardButton(cards), new KeyboardButton(settings), new KeyboardButton(stats) },
+            new[] { new KeyboardButton(cards),    new KeyboardButton(settings), new KeyboardButton(stats) },
             new[] { new KeyboardButton(license) }
         })
         { ResizeKeyboard = true };
@@ -63,60 +62,72 @@ public class KeyboardBuilder : IKeyboardBuilder
         var rows = products
             .Select(p => new[] { InlineKeyboardButton.WithCallbackData($"{p.Name} — {p.Price:F0}$", $"prod:{p.Id}") })
             .ToList();
-        rows.Add(new[] { InlineKeyboardButton.WithCallbackData("⬅️ Back", "menu:products") });
         return new InlineKeyboardMarkup(rows);
     }
 
-    public async Task<InlineKeyboardMarkup> BuildOrderAdminActionsAsync(int orderId)
+    public async Task<InlineKeyboardMarkup> BuildOrderAdminActionsAsync(int orderId, string lang = "fa")
     {
-        var approve = await _texts.GetAsync("AdminActions.ApproveButton", "🟢 Approve");
-        var reject = await _texts.GetAsync("AdminActions.RejectButton", "🔴 Reject");
-        var newReceipt = await _texts.GetAsync("AdminActions.RequestNewReceiptButton", "🔄 New Receipt");
-        var msgUser = await _texts.GetAsync("AdminActions.MessageUserButton", "✉️ Message");
-        var refund = await _texts.GetAsync("AdminActions.RefundButton", "💸 Refund");
+        var approve    = await _texts.GetAsync("AdminActions.ApproveButton",            lang, "🟢 Approve");
+        var reject     = await _texts.GetAsync("AdminActions.RejectButton",             lang, "🔴 Reject");
+        var newReceipt = await _texts.GetAsync("AdminActions.RequestNewReceiptButton",  lang, "🔄 New Receipt");
+        var refund     = await _texts.GetAsync("AdminActions.RefundButton",             lang, "💸 Refund");
 
         return new InlineKeyboardMarkup(new[]
         {
             new[]
             {
                 InlineKeyboardButton.WithCallbackData(approve, $"order:approve:{orderId}"),
-                InlineKeyboardButton.WithCallbackData(reject, $"order:reject:{orderId}")
+                InlineKeyboardButton.WithCallbackData(reject,  $"order:reject:{orderId}")
             },
             new[]
             {
                 InlineKeyboardButton.WithCallbackData(newReceipt, $"order:newreceipt:{orderId}"),
-                InlineKeyboardButton.WithCallbackData(refund, $"order:refund:{orderId}")
+                InlineKeyboardButton.WithCallbackData(refund,     $"order:refund:{orderId}")
             }
         });
     }
 
-    public async Task<InlineKeyboardMarkup> BuildLicenseActionsKeyboardAsync()
+    public async Task<InlineKeyboardMarkup> BuildLicenseActionsKeyboardAsync(string lang = "fa")
     {
-        var refresh = await _texts.GetAsync("LicenseActions.RefreshButton", "🔄 بررسی مجدد");
-        var activate = await _texts.GetAsync("LicenseActions.ActivateButton", "🔑 فعال‌سازی");
-        var fingerprint = await _texts.GetAsync("LicenseActions.FingerprintButton", "🖥 اثر انگشت سرور");
+        var refresh     = await _texts.GetAsync("LicenseActions.RefreshButton",     lang, "🔄 Refresh");
+        var activate    = await _texts.GetAsync("LicenseActions.ActivateButton",    lang, "🔑 Activate");
+        var fingerprint = await _texts.GetAsync("LicenseActions.FingerprintButton", lang, "🖥 Server Fingerprint");
 
         return new InlineKeyboardMarkup(new[]
         {
             new[]
             {
-                InlineKeyboardButton.WithCallbackData(refresh, "lic:refresh"),
+                InlineKeyboardButton.WithCallbackData(refresh,  "lic:refresh"),
                 InlineKeyboardButton.WithCallbackData(activate, "lic:activate")
             },
             new[] { InlineKeyboardButton.WithCallbackData(fingerprint, "lic:fingerprint") }
         });
     }
 
-    public InlineKeyboardMarkup BuildBackButton(string callbackData = "menu:main") =>
-        new(new[] { new[] { InlineKeyboardButton.WithCallbackData("⬅️ Back", callbackData) } });
+    public async Task<InlineKeyboardMarkup> BuildBackButtonAsync(string callbackData = "menu:main", string lang = "fa")
+    {
+        var back = await _texts.GetAsync("Buttons.BackButton", lang, "⬅️ Back");
+        return new InlineKeyboardMarkup(
+            new[] { new[] { InlineKeyboardButton.WithCallbackData(back, callbackData) } });
+    }
 
-    public InlineKeyboardMarkup BuildConfirmKeyboard(string confirmData, string cancelData = "menu:main") =>
-        new(new[]
+    public async Task<InlineKeyboardMarkup> BuildConfirmKeyboardAsync(string confirmData, string cancelData = "menu:main", string lang = "fa")
+    {
+        var confirm = await _texts.GetAsync("Buttons.ConfirmButton", lang, "✅ Confirm");
+        var cancel  = await _texts.GetAsync("Buttons.CancelButton",  lang, "❌ Cancel");
+        return new InlineKeyboardMarkup(new[]
         {
             new[]
             {
-                InlineKeyboardButton.WithCallbackData("✅ Confirm", confirmData),
-                InlineKeyboardButton.WithCallbackData("❌ Cancel", cancelData)
+                InlineKeyboardButton.WithCallbackData(confirm, confirmData),
+                InlineKeyboardButton.WithCallbackData(cancel,  cancelData)
             }
         });
+    }
+
+    public async Task<ReplyKeyboardMarkup> BuildCancelKeyboardAsync(string lang = "fa")
+    {
+        var cancel = await _texts.GetAsync("Buttons.CancelButton", lang, "❌ Cancel");
+        return new ReplyKeyboardMarkup(cancel) { ResizeKeyboard = true };
+    }
 }

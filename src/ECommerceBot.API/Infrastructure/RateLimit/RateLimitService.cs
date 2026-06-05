@@ -39,7 +39,8 @@ public class RateLimitService : IRateLimitService
 
         _cache.Set(key, count, new MemoryCacheEntryOptions
         {
-            AbsoluteExpirationRelativeToNow = window
+            AbsoluteExpirationRelativeToNow = window,
+            Size = 1
         });
 
         return count > limit;
