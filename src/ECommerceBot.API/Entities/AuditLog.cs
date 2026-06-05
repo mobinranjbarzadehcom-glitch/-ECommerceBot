@@ -2,6 +2,7 @@ namespace ECommerceBot.API.Entities;
 
 public class AuditLog : BaseEntity
 {
+    public int TenantId { get; set; }
     public int AdminId { get; set; }
     public string Action { get; set; } = string.Empty;
     public string? TargetType { get; set; }

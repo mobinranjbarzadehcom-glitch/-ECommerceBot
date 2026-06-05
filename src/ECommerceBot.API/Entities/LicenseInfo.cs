@@ -2,6 +2,7 @@ namespace ECommerceBot.API.Entities;
 
 public class LicenseInfo : BaseEntity
 {
+    public int TenantId { get; set; }
     public string LicenseKey { get; set; } = string.Empty;
     public string OwnerName { get; set; } = string.Empty;
     public string? OwnerEmail { get; set; }

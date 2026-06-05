@@ -4,6 +4,8 @@ namespace ECommerceBot.API.UnitOfWork;
 
 public interface IUnitOfWork : IDisposable
 {
+    ITenantRepository Tenants { get; }
+    ISubscriptionPlanRepository SubscriptionPlans { get; }
     IUserRepository Users { get; }
     ICategoryRepository Categories { get; }
     IProductRepository Products { get; }

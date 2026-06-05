@@ -4,6 +4,7 @@ namespace ECommerceBot.API.Entities;
 
 public class TelegramUser : BaseEntity
 {
+    public int TenantId { get; set; }
     public long TelegramId { get; set; }
     public long ChatId { get; set; }
     public string? Username { get; set; }

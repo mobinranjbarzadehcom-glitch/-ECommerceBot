@@ -10,6 +10,7 @@ public class LicenseInfoConfiguration : IEntityTypeConfiguration<LicenseInfo>
     {
         b.HasKey(l => l.Id);
 
+        b.Property(l => l.TenantId).IsRequired();
         b.HasIndex(l => l.LicenseKey).IsUnique();
         b.HasIndex(l => l.IsActive);
         b.HasIndex(l => l.ExpiresAt);

@@ -29,7 +29,9 @@ public class StartupValidatorTests
             ["Telegram:BotToken"] = "123:abc",
             ["Telegram:WebhookSecretToken"] = "secret",
             ["ConnectionStrings:DefaultConnection"] = "Server=.;Database=Test;",
-            ["Telegram:AdminChatIds:0"] = "123456789"
+            ["Telegram:AdminChatIds:0"] = "123456789",
+            ["Telegram:SuperAdminChatIds:0"] = "987654321",
+            ["Security:AesKey"] = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
         });
 
         var exception = Record.Exception(() =>

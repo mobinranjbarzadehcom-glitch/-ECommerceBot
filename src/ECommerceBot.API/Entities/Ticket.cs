@@ -4,6 +4,7 @@ namespace ECommerceBot.API.Entities;
 
 public class Ticket : BaseEntity
 {
+    public int TenantId { get; set; }
     public int UserId { get; set; }
     public string Subject { get; set; } = string.Empty;
     public TicketStatus Status { get; set; } = TicketStatus.Open;

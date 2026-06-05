@@ -12,6 +12,7 @@ public class OrderConfiguration : IEntityTypeConfiguration<Order>
 
         builder.HasKey(o => o.Id);
 
+        builder.Property(o => o.TenantId).IsRequired();
         builder.Property(o => o.TotalAmount).IsRequired().HasPrecision(18, 2);
         builder.Property(o => o.Status).HasConversion<string>().HasMaxLength(20);
         builder.Property(o => o.Notes).HasMaxLength(1000);

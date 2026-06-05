@@ -4,6 +4,7 @@ namespace ECommerceBot.API.Entities;
 
 public class WalletTransaction : BaseEntity
 {
+    public int TenantId { get; set; }
     public int UserId { get; set; }
     public decimal Amount { get; set; }
     public decimal BalanceBefore { get; set; }

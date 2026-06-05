@@ -12,8 +12,9 @@ public class TelegramUserConfiguration : IEntityTypeConfiguration<TelegramUser>
 
         builder.HasKey(u => u.Id);
 
-        builder.HasIndex(u => u.TelegramId).IsUnique();
+        builder.HasIndex(u => new { u.TenantId, u.TelegramId }).IsUnique();
 
+        builder.Property(u => u.TenantId).IsRequired();
         builder.Property(u => u.TelegramId).IsRequired();
         builder.Property(u => u.ChatId);
         builder.Property(u => u.FirstName).IsRequired().HasMaxLength(100);

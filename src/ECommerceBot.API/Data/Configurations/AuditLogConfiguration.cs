@@ -12,6 +12,7 @@ public class AuditLogConfiguration : IEntityTypeConfiguration<AuditLog>
 
         builder.HasKey(a => a.Id);
 
+        builder.Property(a => a.TenantId).IsRequired();
         builder.Property(a => a.Action).IsRequired().HasMaxLength(100);
         builder.Property(a => a.TargetType).HasMaxLength(50);
         builder.Property(a => a.Details).HasMaxLength(1000);

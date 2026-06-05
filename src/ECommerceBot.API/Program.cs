@@ -6,7 +6,9 @@ using ECommerceBot.API.Infrastructure.Cache;
 using ECommerceBot.API.Infrastructure.HealthChecks;
 using ECommerceBot.API.Infrastructure.Licensing;
 using ECommerceBot.API.Infrastructure.Localization;
+using ECommerceBot.API.Infrastructure.Multitenancy;
 using ECommerceBot.API.Infrastructure.RateLimit;
+using ECommerceBot.API.Infrastructure.Security;
 using ECommerceBot.API.Infrastructure.Startup;
 using ECommerceBot.API.Middleware;
 using ECommerceBot.API.Repositories.Implementations;
@@ -106,7 +108,15 @@ try
 
     builder.Services.AddScoped<ICacheService, CacheService>();
 
+    // ── Multi-tenancy ─────────────────────────────────────────────────────────
+    builder.Services.AddScoped<ITenantContext, TenantContext>();
+    builder.Services.AddScoped<ITenantResolver, TenantResolver>();
+    builder.Services.AddSingleton<ITenantBotClientFactory, TenantBotClientFactory>();
+    builder.Services.AddSingleton<IAesEncryptionService, AesEncryptionService>();
+
     // ── Repositories ──────────────────────────────────────────────────────────
+    builder.Services.AddScoped<ITenantRepository, TenantRepository>();
+    builder.Services.AddScoped<ISubscriptionPlanRepository, SubscriptionPlanRepository>();
     builder.Services.AddScoped<IUserRepository, UserRepository>();
     builder.Services.AddScoped<ICategoryRepository, CategoryRepository>();
     builder.Services.AddScoped<IProductRepository, ProductRepository>();
@@ -202,13 +212,27 @@ try
     // ── Startup validation ────────────────────────────────────────────────────
     StartupValidator.Validate(app.Configuration, app.Environment, app.Logger);
 
-    // ── Auto-migrate on container startup ─────────────────────────────────────
+    // ── Auto-migrate + seed default tenant ───────────────────────────────────
     if (Environment.GetEnvironmentVariable("DOTNET_RUNNING_IN_CONTAINER") == "true")
     {
         using var scope = app.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
         await db.Database.MigrateAsync();
         Log.Information("Database migrations applied");
+
+        // Ensure default tenant's bot token is stored encrypted
+        var defaultTenant = await db.Tenants.FindAsync(1);
+        if (defaultTenant is not null && string.IsNullOrEmpty(defaultTenant.BotTokenEncrypted))
+        {
+            var aes = scope.ServiceProvider.GetRequiredService<IAesEncryptionService>();
+            var rawToken = app.Configuration["Telegram:BotToken"] ?? string.Empty;
+            if (!string.IsNullOrEmpty(rawToken))
+            {
+                defaultTenant.BotTokenEncrypted = aes.Encrypt(rawToken);
+                await db.SaveChangesAsync();
+                Log.Information("Default tenant bot token encrypted and stored");
+            }
+        }
     }
 
     // ── Middleware pipeline ───────────────────────────────────────────────────

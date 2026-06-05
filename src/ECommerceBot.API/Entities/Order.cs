@@ -4,6 +4,7 @@ namespace ECommerceBot.API.Entities;
 
 public class Order : BaseEntity
 {
+    public int TenantId { get; set; }
     public int UserId { get; set; }
     public decimal TotalAmount { get; set; }
     public OrderStatus Status { get; set; } = OrderStatus.Pending;

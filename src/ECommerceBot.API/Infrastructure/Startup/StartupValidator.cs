@@ -19,6 +19,13 @@ public static class StartupValidator
         if (adminIds is null || adminIds.Length == 0)
             issues.Add(("Telegram:AdminChatIds", "No admin chat IDs configured. Admin bot commands will not work."));
 
+        var superAdminIds = config.GetSection("Telegram:SuperAdminChatIds").Get<long[]>();
+        if (superAdminIds is null || superAdminIds.Length == 0)
+            issues.Add(("Telegram:SuperAdminChatIds", "No super-admin chat IDs configured. Platform management will not work."));
+
+        if (string.IsNullOrWhiteSpace(config["Security:AesKey"]))
+            issues.Add(("Security:AesKey", "AES encryption key not set. Bot tokens cannot be stored securely. Set a 64-char hex key."));
+
         if (issues.Count == 0) return;
 
         if (env.IsProduction())

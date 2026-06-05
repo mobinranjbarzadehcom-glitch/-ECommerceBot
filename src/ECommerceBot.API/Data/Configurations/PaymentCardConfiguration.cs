@@ -12,6 +12,7 @@ public class PaymentCardConfiguration : IEntityTypeConfiguration<PaymentCard>
 
         builder.HasKey(pc => pc.Id);
 
+        builder.Property(pc => pc.TenantId).IsRequired();
         builder.Property(pc => pc.CardNumber).IsRequired().HasMaxLength(30);
         builder.Property(pc => pc.CardHolderName).IsRequired().HasMaxLength(100);
         builder.Property(pc => pc.BankName).IsRequired().HasMaxLength(100);

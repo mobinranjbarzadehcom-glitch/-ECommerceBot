@@ -10,6 +10,8 @@ public class UnitOfWork : IUnitOfWork
     private readonly AppDbContext _context;
     private IDbContextTransaction? _currentTransaction;
 
+    private ITenantRepository? _tenants;
+    private ISubscriptionPlanRepository? _subscriptionPlans;
     private IUserRepository? _users;
     private ICategoryRepository? _categories;
     private IProductRepository? _products;
@@ -29,6 +31,12 @@ public class UnitOfWork : IUnitOfWork
     {
         _context = context;
     }
+
+    public ITenantRepository Tenants =>
+        _tenants ??= new TenantRepository(_context);
+
+    public ISubscriptionPlanRepository SubscriptionPlans =>
+        _subscriptionPlans ??= new SubscriptionPlanRepository(_context);
 
     public IUserRepository Users =>
         _users ??= new UserRepository(_context);

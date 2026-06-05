@@ -1,13 +1,25 @@
 using ECommerceBot.API.Data.Configurations;
 using ECommerceBot.API.Entities;
+using ECommerceBot.API.Infrastructure.Multitenancy;
 using Microsoft.EntityFrameworkCore;
 
 namespace ECommerceBot.API.Data;
 
 public class AppDbContext : DbContext
 {
-    public AppDbContext(DbContextOptions<AppDbContext> options) : base(options) { }
+    private readonly ITenantContext _tenantContext;
 
+    public AppDbContext(DbContextOptions<AppDbContext> options, ITenantContext tenantContext)
+        : base(options)
+    {
+        _tenantContext = tenantContext;
+    }
+
+    // ── Platform tables (no tenant filter) ────────────────────────────────────
+    public DbSet<Tenant> Tenants => Set<Tenant>();
+    public DbSet<SubscriptionPlan> SubscriptionPlans => Set<SubscriptionPlan>();
+
+    // ── Tenant-scoped tables ───────────────────────────────────────────────────
     public DbSet<TelegramUser> TelegramUsers => Set<TelegramUser>();
     public DbSet<Category> Categories => Set<Category>();
     public DbSet<Product> Products => Set<Product>();
@@ -29,6 +41,29 @@ public class AppDbContext : DbContext
     {
         base.OnModelCreating(modelBuilder);
         modelBuilder.ApplyConfigurationsFromAssembly(typeof(AppDbContext).Assembly);
+
+        // Global query filters — only active when TenantContext is set.
+        // Background services and migrations run without a set context and see all data.
+        modelBuilder.Entity<TelegramUser>().HasQueryFilter(
+            e => !_tenantContext.IsSet || e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<Category>().HasQueryFilter(
+            e => !_tenantContext.IsSet || e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<Product>().HasQueryFilter(
+            e => !_tenantContext.IsSet || e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<Order>().HasQueryFilter(
+            e => !_tenantContext.IsSet || e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<PaymentCard>().HasQueryFilter(
+            e => !_tenantContext.IsSet || e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<WalletTransaction>().HasQueryFilter(
+            e => !_tenantContext.IsSet || e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<Ticket>().HasQueryFilter(
+            e => !_tenantContext.IsSet || e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<BotSetting>().HasQueryFilter(
+            e => !_tenantContext.IsSet || e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<AuditLog>().HasQueryFilter(
+            e => !_tenantContext.IsSet || e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<LicenseInfo>().HasQueryFilter(
+            e => !_tenantContext.IsSet || e.TenantId == _tenantContext.TenantId);
     }
 
     public override int SaveChanges()

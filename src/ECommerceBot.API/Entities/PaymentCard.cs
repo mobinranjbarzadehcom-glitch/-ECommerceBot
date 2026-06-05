@@ -2,6 +2,7 @@ namespace ECommerceBot.API.Entities;
 
 public class PaymentCard : BaseEntity
 {
+    public int TenantId { get; set; }
     public string CardNumber { get; set; } = string.Empty;
     public string CardHolderName { get; set; } = string.Empty;
     public string BankName { get; set; } = string.Empty;

@@ -12,6 +12,7 @@ public class WalletTransactionConfiguration : IEntityTypeConfiguration<WalletTra
 
         builder.HasKey(wt => wt.Id);
 
+        builder.Property(wt => wt.TenantId).IsRequired();
         builder.Property(wt => wt.Amount).IsRequired().HasPrecision(18, 2);
         builder.Property(wt => wt.BalanceBefore).IsRequired().HasPrecision(18, 2);
         builder.Property(wt => wt.BalanceAfter).IsRequired().HasPrecision(18, 2);

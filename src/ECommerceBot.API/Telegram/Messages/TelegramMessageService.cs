@@ -1,3 +1,4 @@
+using ECommerceBot.API.Infrastructure.Multitenancy;
 using ECommerceBot.API.Telegram.Options;
 using Microsoft.Extensions.Options;
 using Telegram.Bot;
@@ -13,9 +14,18 @@ public class TelegramMessageService : ITelegramMessageService
     private readonly TelegramOptions _options;
     private readonly ILogger<TelegramMessageService> _logger;
 
-    public TelegramMessageService(ITelegramBotClient bot, IOptions<TelegramOptions> options, ILogger<TelegramMessageService> logger)
+    public TelegramMessageService(
+        ITelegramBotClient defaultBotClient,
+        ITenantBotClientFactory clientFactory,
+        ITenantContext tenantContext,
+        IOptions<TelegramOptions> options,
+        ILogger<TelegramMessageService> logger)
     {
-        _bot = bot;
+        // Use tenant-specific client when available; otherwise fall back to the default singleton.
+        _bot = tenantContext.IsSet && !string.IsNullOrEmpty(tenantContext.BotToken)
+            ? clientFactory.GetOrCreate(tenantContext.BotToken)
+            : defaultBotClient;
+
         _options = options.Value;
         _logger = logger;
     }
