@@ -41,6 +41,7 @@ public class KeyboardBuilder : IKeyboardBuilder
         var admins     = await _texts.GetAsync("AdminMenu.AdminsButton",     lang, "👑 مدیریت ادمین‌ها");
         var userView   = await _texts.GetAsync("AdminMenu.UserViewButton",   lang, "👁 مشاهده مثل کاربر");
         var license    = await _texts.GetAsync("AdminMenu.LicenseButton",    lang, "🔐 وضعیت لایسنس");
+        var coupons    = await _texts.GetAsync("AdminMenu.CouponsButton",    lang, "🎟 کوپن‌ها");
 
         return new ReplyKeyboardMarkup(new[]
         {
@@ -48,7 +49,8 @@ public class KeyboardBuilder : IKeyboardBuilder
             new[] { new KeyboardButton(products), new KeyboardButton(categories) },
             new[] { new KeyboardButton(cards),    new KeyboardButton(settings) },
             new[] { new KeyboardButton(stats),    new KeyboardButton(admins) },
-            new[] { new KeyboardButton(userView), new KeyboardButton(license) }
+            new[] { new KeyboardButton(userView), new KeyboardButton(license) },
+            new[] { new KeyboardButton(coupons) }
         })
         { ResizeKeyboard = true };
     }
@@ -175,5 +177,27 @@ public class KeyboardBuilder : IKeyboardBuilder
             .Select(c => new[] { InlineKeyboardButton.WithCallbackData(c.Name, $"{callbackPrefix}:{c.Id}") })
             .ToList();
         return new InlineKeyboardMarkup(rows);
+    }
+
+    public InlineKeyboardMarkup BuildCouponDiscountTypeKeyboard() =>
+        new InlineKeyboardMarkup(new[]
+        {
+            new[]
+            {
+                InlineKeyboardButton.WithCallbackData("💯 درصدی", "adm:cpn:dtype:pct"),
+                InlineKeyboardButton.WithCallbackData("💵 مبلغ ثابت", "adm:cpn:dtype:fixed"),
+            }
+        });
+
+    public async Task<ReplyKeyboardMarkup> BuildCouponOrSkipKeyboardAsync(string lang = "fa")
+    {
+        var skip   = "⏭️ بدون تخفیف";
+        var cancel = await _texts.GetAsync("Buttons.CancelButton", lang, "❌ لغو");
+        return new ReplyKeyboardMarkup(new[]
+        {
+            new[] { new KeyboardButton("🎟 کد تخفیف دارم"), new KeyboardButton(skip) },
+            new[] { new KeyboardButton(cancel) }
+        })
+        { ResizeKeyboard = true };
     }
 }

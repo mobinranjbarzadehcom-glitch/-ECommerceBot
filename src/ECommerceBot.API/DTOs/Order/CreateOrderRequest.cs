@@ -10,4 +10,7 @@ public class CreateOrderRequest
     public string? ReceiptPhotoFileId { get; set; }
     public string? ReceiptPhotoUniqueId { get; set; }
     public string? AccountDetails { get; set; }
+    public string? CouponCode { get; set; }
+    public decimal DiscountAmount { get; set; } = 0;
+    public int? CouponId { get; set; }
 }

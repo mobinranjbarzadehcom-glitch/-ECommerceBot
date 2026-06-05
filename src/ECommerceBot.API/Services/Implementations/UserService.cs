@@ -3,6 +3,7 @@ using ECommerceBot.API.DTOs.User;
 using ECommerceBot.API.DTOs.Wallet;
 using ECommerceBot.API.Entities;
 using ECommerceBot.API.Enums;
+using ECommerceBot.API.Infrastructure.Multitenancy;
 using ECommerceBot.API.Services.Common;
 using ECommerceBot.API.Services.Interfaces;
 using ECommerceBot.API.UnitOfWork;
@@ -12,10 +13,12 @@ namespace ECommerceBot.API.Services.Implementations;
 public class UserService : IUserService
 {
     private readonly IUnitOfWork _uow;
+    private readonly ITenantContext _tenantContext;
 
-    public UserService(IUnitOfWork uow)
+    public UserService(IUnitOfWork uow, ITenantContext tenantContext)
     {
         _uow = uow;
+        _tenantContext = tenantContext;
     }
 
     public async Task<ServiceResult<UserDto>> GetOrCreateUserAsync(long telegramId, string firstName, string? lastName, string? username)
@@ -23,6 +26,18 @@ public class UserService : IUserService
         var user = await _uow.Users.GetByTelegramIdAsync(telegramId);
         if (user is null)
         {
+            // Enforce MaxUsers plan limit
+            if (_tenantContext.IsSet)
+            {
+                var tenant = await _uow.Tenants.GetByIdAsync(_tenantContext.TenantId);
+                if (tenant is not null)
+                {
+                    var userCount = await _uow.Users.CountAsync();
+                    if (userCount >= tenant.MaxUsers)
+                        return ServiceResult<UserDto>.Failure("ظرفیت کاربران این فروشگاه تکمیل شده است.");
+                }
+            }
+
             user = new TelegramUser
             {
                 TelegramId = telegramId,

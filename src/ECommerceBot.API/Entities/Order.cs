@@ -15,6 +15,8 @@ public class Order : BaseEntity
     public string? AccountDetails { get; set; }
     public string? AdminNotes { get; set; }
     public DateTime? ExpiresAt { get; set; }
+    public int? CouponId { get; set; }
+    public decimal DiscountAmount { get; set; } = 0;
 
     public TelegramUser User { get; set; } = null!;
     public ICollection<OrderItem> OrderItems { get; set; } = new List<OrderItem>();

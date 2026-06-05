@@ -36,6 +36,10 @@ public class AppDbContext : DbContext
     public DbSet<TicketMessage> TicketMessages => Set<TicketMessage>();
     public DbSet<AuditLog> AuditLogs => Set<AuditLog>();
     public DbSet<LicenseInfo> LicenseInfos => Set<LicenseInfo>();
+    public DbSet<Coupon> Coupons => Set<Coupon>();
+    public DbSet<CouponUsage> CouponUsages => Set<CouponUsage>();
+    public DbSet<Affiliate> Affiliates => Set<Affiliate>();
+    public DbSet<AffiliateReferral> AffiliateReferrals => Set<AffiliateReferral>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -63,6 +67,14 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<AuditLog>().HasQueryFilter(
             e => !_tenantContext.IsSet || e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<LicenseInfo>().HasQueryFilter(
+            e => !_tenantContext.IsSet || e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<Coupon>().HasQueryFilter(
+            e => !_tenantContext.IsSet || e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<CouponUsage>().HasQueryFilter(
+            e => !_tenantContext.IsSet || e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<Affiliate>().HasQueryFilter(
+            e => !_tenantContext.IsSet || e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<AffiliateReferral>().HasQueryFilter(
             e => !_tenantContext.IsSet || e.TenantId == _tenantContext.TenantId);
     }
 

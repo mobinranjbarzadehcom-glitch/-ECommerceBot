@@ -131,12 +131,18 @@ try
     builder.Services.AddScoped<IPaymentCardRepository, PaymentCardRepository>();
     builder.Services.AddScoped<IAuditLogRepository, AuditLogRepository>();
     builder.Services.AddScoped<ILicenseRepository, LicenseRepository>();
+    builder.Services.AddScoped<ICouponRepository, CouponRepository>();
+    builder.Services.AddScoped<ICouponUsageRepository, CouponUsageRepository>();
+    builder.Services.AddScoped<IAffiliateRepository, AffiliateRepository>();
+    builder.Services.AddScoped<IAffiliateReferralRepository, AffiliateReferralRepository>();
 
     // ── UnitOfWork ────────────────────────────────────────────────────────────
     builder.Services.AddScoped<IUnitOfWork, ECommerceBot.API.UnitOfWork.UnitOfWork>();
 
     // ── Business Services ─────────────────────────────────────────────────────
     builder.Services.AddScoped<IUserService, UserService>();
+    builder.Services.AddScoped<ICouponService, CouponService>();
+    builder.Services.AddScoped<IAffiliateService, AffiliateService>();
     builder.Services.AddScoped<ISettingService, SettingService>();
     builder.Services.AddScoped<IPaymentService, PaymentService>();
     builder.Services.AddScoped<IOrderService, OrderService>();
@@ -160,6 +166,7 @@ try
     builder.Services.AddHostedService<OrderExpirationService>();
     builder.Services.AddHostedService<DatabaseBackupService>();
     builder.Services.AddHostedService<LicenseValidationBackgroundService>();
+    builder.Services.AddHostedService<TenantExpiryNotificationService>();
 
     // ── Telegram Bot Client (singleton) ──────────────────────────────────────
     builder.Services.AddSingleton<ITelegramBotClient>(provider =>

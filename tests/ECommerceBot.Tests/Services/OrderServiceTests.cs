@@ -1,6 +1,7 @@
 using ECommerceBot.API.DTOs.Order;
 using ECommerceBot.API.Entities;
 using ECommerceBot.API.Enums;
+using ECommerceBot.API.Infrastructure.Multitenancy;
 using ECommerceBot.API.Repositories.Interfaces;
 using ECommerceBot.API.Services.Implementations;
 using ECommerceBot.API.Services.Interfaces;
@@ -14,24 +15,28 @@ public class OrderServiceTests
 {
     private readonly Mock<IUnitOfWork> _uowMock;
     private readonly Mock<IUserService> _userServiceMock;
+    private readonly Mock<ITenantContext> _tenantContextMock;
     private readonly Mock<IOrderRepository> _orderRepoMock;
     private readonly Mock<IProductRepository> _productRepoMock;
     private readonly Mock<IProductKeyRepository> _productKeyRepoMock;
     private readonly Mock<IUserRepository> _userRepoMock;
     private readonly Mock<ITransactionRepository> _transactionRepoMock;
     private readonly Mock<IWalletTransactionRepository> _walletRepoMock;
+    private readonly Mock<ICouponRepository> _couponRepoMock;
     private readonly OrderService _sut;
 
     public OrderServiceTests()
     {
         _uowMock = new Mock<IUnitOfWork>();
         _userServiceMock = new Mock<IUserService>();
+        _tenantContextMock = new Mock<ITenantContext>();
         _orderRepoMock = new Mock<IOrderRepository>();
         _productRepoMock = new Mock<IProductRepository>();
         _productKeyRepoMock = new Mock<IProductKeyRepository>();
         _userRepoMock = new Mock<IUserRepository>();
         _transactionRepoMock = new Mock<ITransactionRepository>();
         _walletRepoMock = new Mock<IWalletTransactionRepository>();
+        _couponRepoMock = new Mock<ICouponRepository>();
 
         _uowMock.Setup(u => u.Orders).Returns(_orderRepoMock.Object);
         _uowMock.Setup(u => u.Products).Returns(_productRepoMock.Object);
@@ -39,8 +44,11 @@ public class OrderServiceTests
         _uowMock.Setup(u => u.Users).Returns(_userRepoMock.Object);
         _uowMock.Setup(u => u.Transactions).Returns(_transactionRepoMock.Object);
         _uowMock.Setup(u => u.WalletTransactions).Returns(_walletRepoMock.Object);
+        _uowMock.Setup(u => u.Coupons).Returns(_couponRepoMock.Object);
 
-        _sut = new OrderService(_uowMock.Object, _userServiceMock.Object);
+        _tenantContextMock.Setup(t => t.IsSet).Returns(false);
+
+        _sut = new OrderService(_uowMock.Object, _userServiceMock.Object, _tenantContextMock.Object);
     }
 
     [Fact]

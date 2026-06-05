@@ -2,6 +2,7 @@ using ECommerceBot.API.DTOs.Common;
 using ECommerceBot.API.DTOs.Order;
 using ECommerceBot.API.Entities;
 using ECommerceBot.API.Enums;
+using ECommerceBot.API.Infrastructure.Multitenancy;
 using ECommerceBot.API.Services.Common;
 using ECommerceBot.API.Services.Interfaces;
 using ECommerceBot.API.UnitOfWork;
@@ -15,17 +16,31 @@ public class OrderService : IOrderService
 
     private readonly IUnitOfWork _uow;
     private readonly IUserService _userService;
+    private readonly ITenantContext _tenantContext;
 
-    public OrderService(IUnitOfWork uow, IUserService userService)
+    public OrderService(IUnitOfWork uow, IUserService userService, ITenantContext tenantContext)
     {
         _uow = uow;
         _userService = userService;
+        _tenantContext = tenantContext;
     }
 
     public async Task<ServiceResult<OrderDto>> CreateOrderAsync(int userId, CreateOrderRequest request)
     {
         if (string.IsNullOrWhiteSpace(request.AccountDetails))
             return ServiceResult<OrderDto>.Failure("Account details (Player ID) are required");
+
+        // Enforce MaxOrdersPerMonth plan limit
+        if (_tenantContext.IsSet)
+        {
+            var tenant = await _uow.Tenants.GetByIdAsync(_tenantContext.TenantId);
+            if (tenant is not null)
+            {
+                var monthlyCount = await _uow.Coupons.GetMonthlyOrderCountAsync(_tenantContext.TenantId, DateTime.UtcNow);
+                if (monthlyCount >= tenant.MaxOrdersPerMonth)
+                    return ServiceResult<OrderDto>.Failure("سقف سفارشات ماهانه این فروشگاه تکمیل شده است.");
+            }
+        }
 
         var pendingOrders = await _uow.Orders.GetPendingOrdersByUserAsync(userId);
         if (pendingOrders.Count() >= MaxPendingOrdersPerUser)
@@ -44,7 +59,7 @@ public class OrderService : IOrderService
         if (product.Status != ProductStatus.Active)
             return ServiceResult<OrderDto>.Failure("Product is not available");
 
-        var total = product.Price * request.Quantity;
+        var total = Math.Max(0, product.Price * request.Quantity - request.DiscountAmount);
 
         await _uow.BeginTransactionAsync();
         try
@@ -88,6 +103,8 @@ public class OrderService : IOrderService
         {
             UserId = userId,
             TotalAmount = total,
+            DiscountAmount = request.DiscountAmount,
+            CouponId = request.CouponId,
             Status = OrderStatus.Completed,
             AccountDetails = request.AccountDetails,
             OrderItems = new List<OrderItem>
@@ -158,6 +175,8 @@ public class OrderService : IOrderService
         {
             UserId = userId,
             TotalAmount = total,
+            DiscountAmount = request.DiscountAmount,
+            CouponId = request.CouponId,
             Status = OrderStatus.Pending,
             ReceiptPhotoFileId = request.ReceiptPhotoFileId,
             ReceiptPhotoUniqueId = request.ReceiptPhotoUniqueId,

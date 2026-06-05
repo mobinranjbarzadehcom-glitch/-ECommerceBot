@@ -8,4 +8,6 @@ public class OrderContext
     public int Quantity { get; set; } = 1;
     public string? PlayerId { get; set; }
     public int CategoryId { get; set; }
+    public string? CouponCode { get; set; }
+    public decimal DiscountAmount { get; set; } = 0;
 }

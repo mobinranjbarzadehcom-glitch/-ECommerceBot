@@ -1,5 +1,6 @@
 using ECommerceBot.API.Entities;
 using ECommerceBot.API.Enums;
+using ECommerceBot.API.Infrastructure.Multitenancy;
 using ECommerceBot.API.Repositories.Interfaces;
 using ECommerceBot.API.Services.Implementations;
 using ECommerceBot.API.UnitOfWork;
@@ -11,6 +12,7 @@ namespace ECommerceBot.Tests.Services;
 public class UserServiceTests
 {
     private readonly Mock<IUnitOfWork> _uowMock;
+    private readonly Mock<ITenantContext> _tenantContextMock;
     private readonly Mock<IUserRepository> _userRepoMock;
     private readonly Mock<IWalletTransactionRepository> _walletRepoMock;
     private readonly UserService _sut;
@@ -18,13 +20,16 @@ public class UserServiceTests
     public UserServiceTests()
     {
         _uowMock = new Mock<IUnitOfWork>();
+        _tenantContextMock = new Mock<ITenantContext>();
         _userRepoMock = new Mock<IUserRepository>();
         _walletRepoMock = new Mock<IWalletTransactionRepository>();
 
         _uowMock.Setup(u => u.Users).Returns(_userRepoMock.Object);
         _uowMock.Setup(u => u.WalletTransactions).Returns(_walletRepoMock.Object);
 
-        _sut = new UserService(_uowMock.Object);
+        _tenantContextMock.Setup(t => t.IsSet).Returns(false);
+
+        _sut = new UserService(_uowMock.Object, _tenantContextMock.Object);
     }
 
     [Fact]

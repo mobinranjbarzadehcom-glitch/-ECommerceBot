@@ -32,4 +32,13 @@ public enum ConversationState
 
     // Backup channel
     AwaitingBackupChannelId = 50,
+
+    // Coupon admin wizard
+    AwaitingCouponCode = 60,
+    AwaitingCouponDiscountValue = 61,
+    AwaitingCouponMaxUses = 62,
+    AwaitingCouponExpiry = 63,
+
+    // User coupon at checkout
+    AwaitingApplyCoupon = 70,
 }

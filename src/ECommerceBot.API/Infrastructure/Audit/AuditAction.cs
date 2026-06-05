@@ -29,4 +29,9 @@ public static class AuditAction
     public const string EditUser = "EditUser";
     public const string AddAdminRole = "AddAdminRole";
     public const string RemoveAdminRole = "RemoveAdminRole";
+    public const string CreateCoupon = "CreateCoupon";
+    public const string ToggleCoupon = "ToggleCoupon";
+    public const string ApplyCoupon = "ApplyCoupon";
+    public const string CreateAffiliate = "CreateAffiliate";
+    public const string TrackReferral = "TrackReferral";
 }

@@ -14,4 +14,10 @@ public class AdminContext
     public string? PendingProductTitle { get; set; }
     public string? PendingProductDescription { get; set; }
     public decimal? PendingProductPrice { get; set; }
+
+    // Coupon creation wizard
+    public string? PendingCouponCode { get; set; }
+    public string? PendingCouponDiscountType { get; set; }
+    public decimal? PendingCouponDiscountValue { get; set; }
+    public int? PendingCouponMaxUses { get; set; }
 }

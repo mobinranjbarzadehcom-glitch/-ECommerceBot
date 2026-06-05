@@ -2,6 +2,7 @@ using ECommerceBot.API.Entities;
 using ECommerceBot.API.Enums;
 using ECommerceBot.API.Infrastructure.Audit;
 using ECommerceBot.API.Infrastructure.Licensing;
+using ECommerceBot.API.Infrastructure.Multitenancy;
 using ECommerceBot.API.Infrastructure.RateLimit;
 using ECommerceBot.API.Infrastructure.Security;
 using ECommerceBot.API.Services.Interfaces;
@@ -28,6 +29,8 @@ public class CallbackQueryHandler : ICallbackQueryHandler
     private readonly IConversationManager _conv;
     private readonly IAuditLogService _audit;
     private readonly IRateLimitService _rateLimit;
+    private readonly ICouponService _couponService;
+    private readonly ITenantContext _tenantContext;
     private readonly ILicenseService _licenseService;
     private readonly IServerFingerprintService _fingerprintService;
     private readonly ILogger<CallbackQueryHandler> _logger;
@@ -44,6 +47,8 @@ public class CallbackQueryHandler : ICallbackQueryHandler
         IConversationManager conv,
         IAuditLogService audit,
         IRateLimitService rateLimit,
+        ICouponService couponService,
+        ITenantContext tenantContext,
         ILicenseService licenseService,
         IServerFingerprintService fingerprintService,
         ILogger<CallbackQueryHandler> logger)
@@ -59,6 +64,8 @@ public class CallbackQueryHandler : ICallbackQueryHandler
         _conv = conv;
         _audit = audit;
         _rateLimit = rateLimit;
+        _couponService = couponService;
+        _tenantContext = tenantContext;
         _licenseService = licenseService;
         _fingerprintService = fingerprintService;
         _logger = logger;
@@ -415,6 +422,7 @@ public class CallbackQueryHandler : ICallbackQueryHandler
             case "card": await HandleAdminCardCallbackAsync(idStr, parts, user, chatId, ct); break;
             case "set":  await HandleAdminSettingCallbackAsync(idStr, parts, user, chatId, ct); break;
             case "mgr":  await HandleAdminManagementCallbackAsync(idStr, parts, user, chatId, ct); break;
+            case "cpn":  await HandleAdminCouponCallbackAsync(idStr, parts, user, chatId, ct); break;
         }
     }
 
@@ -494,6 +502,22 @@ public class CallbackQueryHandler : ICallbackQueryHandler
 
         if (idStr == "add")
         {
+            // Enforce MaxProducts plan limit
+            if (_tenantContext.IsSet)
+            {
+                var tenant = await _uow.Tenants.GetByIdAsync(_tenantContext.TenantId);
+                if (tenant is not null)
+                {
+                    var productCount = await _uow.Products.CountAsync();
+                    if (productCount >= tenant.MaxProducts)
+                    {
+                        await _msg.SendHtmlAsync(chatId,
+                            $"❌ سقف محصولات این پلن ({tenant.MaxProducts} عدد) تکمیل شده است.", null, ct);
+                        return;
+                    }
+                }
+            }
+
             await _conv.SetAdminContextAsync(user, new AdminContext { PendingAction = "new_product" }, ct);
             await _conv.SetStateAsync(user, ConversationState.AwaitingProductTitle, ct);
             await _msg.SendHtmlAsync(chatId,
@@ -789,5 +813,78 @@ public class CallbackQueryHandler : ICallbackQueryHandler
                 new[] { InlineKeyboardButton.WithCallbackData("🔑 افزودن کلید", $"adm:prod:{product.Id}:keys") },
                 new[] { InlineKeyboardButton.WithCallbackData("⬅️ بازگشت به محصولات", "adm:prod:list") }
             }), ct);
+    }
+
+    // ─── Admin coupon callbacks ──────────────────────────────────────────────
+
+    private async Task HandleAdminCouponCallbackAsync(string? idStr, string[] parts, TelegramUser user, long chatId, CancellationToken ct)
+    {
+        var lang = user.PreferredLanguage;
+
+        // adm:cpn:new — start wizard
+        if (idStr == "new")
+        {
+            await _conv.SetAdminContextAsync(user, new AdminContext(), ct);
+            await _conv.SetStateAsync(user, ConversationState.AwaitingCouponCode, ct);
+            await _msg.SendHtmlAsync(chatId,
+                "🎟 <b>ایجاد کوپن جدید</b>\n\n📝 کد کوپن را وارد کنید (حروف لاتین و اعداد):",
+                await _kb.BuildCancelKeyboardAsync(lang), ct);
+            return;
+        }
+
+        // adm:cpn:dtype:pct|fixed — discount type chosen during wizard
+        if (idStr == "dtype")
+        {
+            var dtype = parts.ElementAtOrDefault(3);
+            if (dtype is not "pct" and not "fixed") return;
+
+            var ctx = await _conv.GetAdminContextAsync(user) ?? new AdminContext();
+            ctx.PendingCouponDiscountType = dtype;
+            await _conv.SetAdminContextAsync(user, ctx, ct);
+            await _conv.SetStateAsync(user, ConversationState.AwaitingCouponDiscountValue, ct);
+
+            var typeLabel = dtype == "pct" ? "درصد (مثلاً 20 برای ۲۰٪)" : "مبلغ ثابت (تومان)";
+            await _msg.SendHtmlAsync(chatId,
+                $"✅ نوع تخفیف: {(dtype == "pct" ? "درصدی" : "مبلغ ثابت")}\n\n💰 مقدار تخفیف را وارد کنید ({typeLabel}):",
+                await _kb.BuildCancelKeyboardAsync(lang), ct);
+            return;
+        }
+
+        // adm:cpn:{id} — show coupon detail
+        if (int.TryParse(idStr, out var couponId))
+        {
+            var coupon = await _uow.Coupons.GetByIdAsync(couponId);
+            if (coupon is null) { await _msg.SendHtmlAsync(chatId, "❌ کوپن یافت نشد.", null, ct); return; }
+
+            var action = parts.ElementAtOrDefault(3);
+            if (action == "toggle")
+            {
+                await _couponService.ToggleActiveAsync(couponId);
+                await _audit.LogAsync(user.Id, AuditAction.ToggleCoupon, "Coupon", couponId,
+                    coupon.IsActive ? "Deactivated" : "Activated");
+                await _msg.SendHtmlAsync(chatId,
+                    $"✅ کوپن <b>{HtmlSanitizer.Encode(coupon.Code)}</b> {(coupon.IsActive ? "غیرفعال" : "فعال")} شد.", null, ct);
+                return;
+            }
+
+            // Show detail card
+            var typeLabel = coupon.DiscountType == DiscountType.Percentage
+                ? $"{coupon.DiscountValue:F0}%"
+                : $"{coupon.DiscountValue:F0} تومان";
+            var html = $"🎟 <b>{HtmlSanitizer.Encode(coupon.Code)}</b>\n\n" +
+                       $"💰 تخفیف: {typeLabel}\n" +
+                       $"📊 وضعیت: {(coupon.IsActive ? "✅ فعال" : "❌ غیرفعال")}\n" +
+                       $"🔢 استفاده: {coupon.UsedCount}" + (coupon.MaxUses.HasValue ? $"/{coupon.MaxUses}" : " (نامحدود)") + "\n" +
+                       (coupon.MinOrderAmount.HasValue ? $"📦 حداقل خرید: {coupon.MinOrderAmount:F0} تومان\n" : "") +
+                       (coupon.ExpiresAt.HasValue ? $"📅 انقضا: {coupon.ExpiresAt.Value:yyyy-MM-dd}" : "📅 بدون انقضا");
+
+            var toggleLabel = coupon.IsActive ? "🔴 غیرفعال کردن" : "🟢 فعال کردن";
+            var kb = new InlineKeyboardMarkup(new[]
+            {
+                new[] { InlineKeyboardButton.WithCallbackData(toggleLabel, $"adm:cpn:{couponId}:toggle") },
+                new[] { InlineKeyboardButton.WithCallbackData("⬅️ بازگشت", "adm:cpn:list") }
+            });
+            await _msg.SendHtmlAsync(chatId, html, kb, ct);
+        }
     }
 }

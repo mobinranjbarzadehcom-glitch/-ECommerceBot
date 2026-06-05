@@ -4,6 +4,7 @@ using ECommerceBot.API.Entities;
 using ECommerceBot.API.Enums;
 using ECommerceBot.API.Infrastructure.Audit;
 using ECommerceBot.API.Infrastructure.Licensing;
+using ECommerceBot.API.Infrastructure.Multitenancy;
 using ECommerceBot.API.Infrastructure.RateLimit;
 using ECommerceBot.API.Infrastructure.Security;
 using ECommerceBot.API.Services.Interfaces;
@@ -32,6 +33,9 @@ public class MessageHandler : IMessageHandler
     private readonly IConversationManager _conv;
     private readonly IRateLimitService _rateLimit;
     private readonly IAuditLogService _audit;
+    private readonly ICouponService _couponService;
+    private readonly IAffiliateService _affiliateService;
+    private readonly ITenantContext _tenantContext;
     private readonly ILicenseService _licenseService;
     private readonly IServerFingerprintService _fingerprintService;
     private readonly ILogger<MessageHandler> _logger;
@@ -50,6 +54,9 @@ public class MessageHandler : IMessageHandler
         IConversationManager conv,
         IRateLimitService rateLimit,
         IAuditLogService audit,
+        ICouponService couponService,
+        IAffiliateService affiliateService,
+        ITenantContext tenantContext,
         ILicenseService licenseService,
         IServerFingerprintService fingerprintService,
         ILogger<MessageHandler> logger)
@@ -67,6 +74,9 @@ public class MessageHandler : IMessageHandler
         _conv = conv;
         _rateLimit = rateLimit;
         _audit = audit;
+        _couponService = couponService;
+        _affiliateService = affiliateService;
+        _tenantContext = tenantContext;
         _licenseService = licenseService;
         _fingerprintService = fingerprintService;
         _logger = logger;
@@ -139,12 +149,30 @@ public class MessageHandler : IMessageHandler
         var chatId = message.Chat.Id;
         var from = message.From!;
 
+        var isNewUser = user is null;
         if (user is null)
         {
-            await _userService.GetOrCreateUserAsync(from.Id, from.FirstName, from.LastName, from.Username);
+            var createResult = await _userService.GetOrCreateUserAsync(from.Id, from.FirstName, from.LastName, from.Username);
+            if (!createResult.IsSuccess)
+            {
+                await _msg.SendHtmlAsync(chatId, createResult.ErrorMessage ?? "خطا در ثبت‌نام.", ct: ct);
+                return;
+            }
             user = await _uow.Users.GetByTelegramIdAsync(from.Id);
             if (user is null) return;
             _logger.LogInformation("New user registered: {TelegramId} @{Username}", from.Id, from.Username ?? "—");
+        }
+
+        // Handle referral code: /start ref_XXXX
+        if (isNewUser && message.Text is not null)
+        {
+            var parts = message.Text.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length == 2 && parts[1].StartsWith("ref_", StringComparison.OrdinalIgnoreCase))
+            {
+                var refCode = parts[1][4..]; // strip "ref_" prefix
+                if (!string.IsNullOrWhiteSpace(refCode))
+                    await _affiliateService.TrackReferralAsync(refCode, user.Id);
+            }
         }
 
         user.ChatId = chatId;
@@ -177,6 +205,7 @@ public class MessageHandler : IMessageHandler
             case "/wallet": await ShowWalletAsync(user, ct); break;
             case "/orders": await ShowOrdersAsync(user, ct); break;
             case "/help":   await ShowHelpAsync(user, ct); break;
+            case "/ref":    await ShowAffiliateAsync(user, ct); break;
             default:        await ShowMenuAsync(user, ct); break;
         }
     }
@@ -365,6 +394,21 @@ public class MessageHandler : IMessageHandler
             case ConversationState.AwaitingBackupChannelId:
                 await HandleBackupChannelIdAsync(message, user, ct);
                 break;
+            case ConversationState.AwaitingApplyCoupon:
+                await HandleApplyCouponAsync(message, user, ct);
+                break;
+            case ConversationState.AwaitingCouponCode:
+                await HandleAdminCouponCodeAsync(message, user, ct);
+                break;
+            case ConversationState.AwaitingCouponDiscountValue:
+                await HandleAdminCouponDiscountValueAsync(message, user, ct);
+                break;
+            case ConversationState.AwaitingCouponMaxUses:
+                await HandleAdminCouponMaxUsesAsync(message, user, ct);
+                break;
+            case ConversationState.AwaitingCouponExpiry:
+                await HandleAdminCouponExpiryAsync(message, user, ct);
+                break;
             default:
                 await _conv.ClearStateAsync(user, ct);
                 await ShowMenuAsync(user, ct);
@@ -386,20 +430,26 @@ public class MessageHandler : IMessageHandler
         var ctx = await _conv.GetOrderContextAsync(user) ?? new OrderContext();
         ctx.PlayerId = playerId;
         await _conv.SetOrderContextAsync(user, ctx, ct);
-        await _conv.SetStateAsync(user, ConversationState.AwaitingReceipt, ct);
 
-        var cardResult = await _paymentService.GetActivePaymentCardAsync();
-        var cardInfo = cardResult.IsSuccess
-            ? $"💳 Card: <code>{cardResult.Data!.CardNumber}</code>\n👤 {cardResult.Data.CardHolderName}\n🏦 {cardResult.Data.BankName}"
-            : "💳 Contact support for payment details.";
+        // Check if plan allows coupons before offering the coupon step
+        var tenant = _tenantContext.IsSet
+            ? await _uow.Tenants.GetByIdAsync(_tenantContext.TenantId)
+            : null;
+        var planAllowsCoupons = tenant?.Plan?.AllowsCoupons ?? false;
 
-        var instruction = await _texts.FormatAsync("PaymentInstructionMessage", lang,
-            new() { ["amount"] = $"{ctx.ProductPrice * ctx.Quantity:F2}$" },
-            $"💳 Transfer <b>{ctx.ProductPrice * ctx.Quantity:F2}$</b> and send the receipt.");
-
-        await _msg.SendHtmlAsync(user.ChatId,
-            $"✅ Player ID saved: <code>{HtmlSanitizer.Encode(playerId)}</code>\n\n{cardInfo}\n\n{instruction}\n\n📸 Now send the receipt photo:",
-            await _kb.BuildCancelKeyboardAsync(lang), ct);
+        if (planAllowsCoupons)
+        {
+            await _conv.SetStateAsync(user, ConversationState.AwaitingApplyCoupon, ct);
+            await _msg.SendHtmlAsync(user.ChatId,
+                $"✅ شناسه بازیکن ذخیره شد: <code>{HtmlSanitizer.Encode(playerId)}</code>\n\n" +
+                "🎟 آیا کد تخفیف دارید؟\nکد خود را وارد کنید یا «⏭️ بدون تخفیف» را بزنید:",
+                await _kb.BuildCouponOrSkipKeyboardAsync(lang), ct);
+        }
+        else
+        {
+            await _conv.SetStateAsync(user, ConversationState.AwaitingReceipt, ct);
+            await ShowPaymentInstructionsAsync(user, ctx, ct);
+        }
     }
 
     private async Task HandleReceiptInputAsync(Message message, TelegramUser user, CancellationToken ct)
@@ -439,7 +489,9 @@ public class MessageHandler : IMessageHandler
             PaymentMethod = PaymentMethod.CardPayment,
             ReceiptPhotoFileId = fileId,
             ReceiptPhotoUniqueId = fileUniqueId,
-            AccountDetails = ctx.PlayerId
+            AccountDetails = ctx.PlayerId,
+            DiscountAmount = ctx.DiscountAmount,
+            CouponCode = ctx.CouponCode
         };
 
         var result = await _orderService.CreateOrderAsync(user.Id, request);
@@ -452,6 +504,18 @@ public class MessageHandler : IMessageHandler
         await _conv.ClearStateAsync(user, ct);
         var order = result.Data!;
 
+        // Record coupon usage if a coupon was applied
+        if (!string.IsNullOrEmpty(ctx.CouponCode))
+        {
+            var coupon = await _uow.Coupons.GetByCodeAsync(ctx.CouponCode);
+            if (coupon is not null)
+            {
+                await _couponService.RecordUsageAsync(coupon.Id, user.Id, order.Id);
+                await _audit.LogAsync(user.Id, AuditAction.ApplyCoupon, "Order", order.Id,
+                    $"Coupon={ctx.CouponCode}, Discount={ctx.DiscountAmount}");
+            }
+        }
+
         var pendingMsg = await _texts.FormatAsync("OrderPendingMessage", lang,
             new() { ["orderId"] = order.Id.ToString() },
             $"⏳ <b>Order #{order.Id} submitted!</b> We'll review it shortly.");
@@ -459,11 +523,13 @@ public class MessageHandler : IMessageHandler
 
         _logger.LogInformation("Order #{OrderId} created by user {TelegramId}", order.Id, user.TelegramId);
 
-        var adminCaption = $"🆕 <b>New Order #{order.Id}</b>\n" +
-                           $"👤 User: {HtmlSanitizer.Encode(user.FirstName)} (@{HtmlSanitizer.Encode(user.Username ?? "—")})\n" +
-                           $"📦 Product: {HtmlSanitizer.Encode(ctx.ProductName)}\n" +
-                           $"💰 Amount: {order.TotalAmount:F2}$\n" +
-                           $"🎮 Account: <code>{HtmlSanitizer.Encode(ctx.PlayerId ?? "—")}</code>\n" +
+        var adminCaption = $"🆕 <b>سفارش جدید #{order.Id}</b>\n" +
+                           $"👤 کاربر: {HtmlSanitizer.Encode(user.FirstName)} (@{HtmlSanitizer.Encode(user.Username ?? "—")})\n" +
+                           $"📦 محصول: {HtmlSanitizer.Encode(ctx.ProductName)}\n" +
+                           $"💰 مبلغ: {order.TotalAmount:F0} تومان" +
+                           (ctx.DiscountAmount > 0 ? $" (تخفیف: {ctx.DiscountAmount:F0})" : "") + "\n" +
+                           (ctx.CouponCode is not null ? $"🎟 کوپن: <code>{HtmlSanitizer.Encode(ctx.CouponCode)}</code>\n" : "") +
+                           $"🎮 حساب: <code>{HtmlSanitizer.Encode(ctx.PlayerId ?? "—")}</code>\n" +
                            $"🕐 {DateTime.UtcNow:yyyy-MM-dd HH:mm} UTC";
 
         // Admin panels are always Persian (admin's default lang)
@@ -521,6 +587,7 @@ public class MessageHandler : IMessageHandler
         var admins        = await _texts.GetAsync("AdminMenu.AdminsButton",     lang, "👑 مدیریت ادمین‌ها");
         var userView      = await _texts.GetAsync("AdminMenu.UserViewButton",   lang, "👁 مشاهده مثل کاربر");
         var license       = await _texts.GetAsync("AdminMenu.LicenseButton",    lang, "🔐 وضعیت لایسنس");
+        var coupons       = await _texts.GetAsync("AdminMenu.CouponsButton",    lang, "🎟 کوپن‌ها");
 
         if (text == pendingOrders) { await ShowAdminPendingOrdersAsync(user, ct); return; }
         if (text == users)         { await ShowAdminUsersAsync(user, ct); return; }
@@ -532,6 +599,7 @@ public class MessageHandler : IMessageHandler
         if (text == admins)        { await ShowAdminManagementAsync(user, ct); return; }
         if (text == userView)      { await ShowUserViewAsync(user, ct); return; }
         if (text == license)       { await ShowAdminLicenseStatusAsync(user, ct); return; }
+        if (text == coupons)       { await ShowAdminCouponsAsync(user, ct); return; }
 
         await _msg.SendHtmlAsync(user.ChatId,
             await _texts.GetAsync("Admin.UseMenu", lang, "لطفاً از دکمه‌های منو استفاده کنید."),
@@ -1127,6 +1195,23 @@ public class MessageHandler : IMessageHandler
             return;
         }
 
+        // Enforce MaxAdmins plan limit
+        if (_tenantContext.IsSet)
+        {
+            var tenant = await _uow.Tenants.GetByIdAsync(_tenantContext.TenantId);
+            if (tenant is not null)
+            {
+                var currentAdmins = await _uow.Users.CountAsync(u => u.Role == UserRole.Admin);
+                if (currentAdmins >= tenant.MaxAdmins)
+                {
+                    await _msg.SendHtmlAsync(user.ChatId,
+                        $"❌ سقف ادمین‌های این پلن ({tenant.MaxAdmins} نفر) تکمیل شده است.",
+                        await _kb.BuildAdminMenuAsync(lang), ct);
+                    return;
+                }
+            }
+        }
+
         target.Role = UserRole.Admin;
         _uow.Users.Update(target);
         await _uow.SaveChangesAsync(ct);
@@ -1169,6 +1254,274 @@ public class MessageHandler : IMessageHandler
             "👁 <b>مشاهده مثل کاربر</b>\n\nمنوی زیر همان چیزی است که کاربران می‌بینند.\n" +
             "برای بازگشت به پنل ادمین، /start بزنید.",
             kb, ct);
+    }
+
+    // ─── Phase 4: Coupons + Affiliate ───────────────────────────────────────
+
+    private async Task ShowAdminCouponsAsync(TelegramUser user, CancellationToken ct)
+    {
+        var result = await _couponService.GetAllAsync();
+        var coupons = result.Data?.ToList() ?? new();
+        var html = "🎟 <b>کوپن‌های تخفیف</b>\n\n";
+        if (coupons.Count == 0)
+            html += "هنوز کوپنی ثبت نشده است.";
+
+        var rows = coupons.Select(c =>
+        {
+            var icon = c.IsActive ? "✅" : "❌";
+            var label = c.DiscountType == DiscountType.Percentage
+                ? $"{icon} {c.Code} — {c.DiscountValue:F0}%"
+                : $"{icon} {c.Code} — {c.DiscountValue:F0} تومان";
+            return new[] { InlineKeyboardButton.WithCallbackData(label, $"adm:cpn:{c.Id}") };
+        }).ToList();
+        rows.Add(new[] { InlineKeyboardButton.WithCallbackData("➕ کوپن جدید", "adm:cpn:new") });
+
+        await _msg.SendHtmlAsync(user.ChatId, html, new InlineKeyboardMarkup(rows), ct);
+    }
+
+    // Coupon wizard: Step 1 — code
+    private async Task HandleAdminCouponCodeAsync(Message message, TelegramUser user, CancellationToken ct)
+    {
+        var lang = user.PreferredLanguage;
+        var code = message.Text?.Trim().ToUpper();
+        if (string.IsNullOrWhiteSpace(code) || code.Length < 3)
+        {
+            await _msg.SendHtmlAsync(user.ChatId, "❌ کد باید حداقل ۳ کاراکتر باشد.", ct: ct);
+            return;
+        }
+
+        var ctx = await _conv.GetAdminContextAsync(user) ?? new AdminContext();
+        ctx.PendingCouponCode = code;
+        await _conv.SetAdminContextAsync(user, ctx, ct);
+
+        // Transition: pick discount type via inline keyboard (state stays AwaitingCouponCode until inline callback picks type)
+        await _conv.SetStateAsync(user, ConversationState.AwaitingCouponDiscountValue, ct);
+        await _msg.SendHtmlAsync(user.ChatId,
+            $"✅ کد: <b>{HtmlSanitizer.Encode(code)}</b>\n\n📊 نوع تخفیف را انتخاب کنید:",
+            _kb.BuildCouponDiscountTypeKeyboard(), ct);
+    }
+
+    // Coupon wizard: Step 2b — discount value (after type chosen via callback)
+    private async Task HandleAdminCouponDiscountValueAsync(Message message, TelegramUser user, CancellationToken ct)
+    {
+        var lang = user.PreferredLanguage;
+        if (!decimal.TryParse(message.Text?.Trim(), out var value) || value <= 0)
+        {
+            await _msg.SendHtmlAsync(user.ChatId, "❌ مقدار نامعتبر. یک عدد مثبت وارد کنید.", ct: ct);
+            return;
+        }
+
+        var ctx = await _conv.GetAdminContextAsync(user) ?? new AdminContext();
+        if (ctx.PendingCouponDiscountType == "pct" && value > 100)
+        {
+            await _msg.SendHtmlAsync(user.ChatId, "❌ درصد تخفیف نمی‌تواند بیشتر از ۱۰۰ باشد.", ct: ct);
+            return;
+        }
+
+        ctx.PendingCouponDiscountValue = value;
+        await _conv.SetAdminContextAsync(user, ctx, ct);
+        await _conv.SetStateAsync(user, ConversationState.AwaitingCouponMaxUses, ct);
+
+        await _msg.SendHtmlAsync(user.ChatId,
+            "🔢 حداکثر تعداد استفاده را وارد کنید:\n<i>(برای نامحدود، «⏭️ رد شدن» را بزنید)</i>",
+            await _kb.BuildSkipCancelKeyboardAsync(lang), ct);
+    }
+
+    // Coupon wizard: Step 3 — max uses
+    private async Task HandleAdminCouponMaxUsesAsync(Message message, TelegramUser user, CancellationToken ct)
+    {
+        var lang = user.PreferredLanguage;
+        var text = message.Text?.Trim();
+        int? maxUses = null;
+
+        if (text != "⏭️ رد شدن")
+        {
+            if (!int.TryParse(text, out var n) || n <= 0)
+            {
+                await _msg.SendHtmlAsync(user.ChatId, "❌ عدد صحیح مثبت وارد کنید.", ct: ct);
+                return;
+            }
+            maxUses = n;
+        }
+
+        var ctx = await _conv.GetAdminContextAsync(user) ?? new AdminContext();
+        ctx.PendingCouponMaxUses = maxUses;
+        await _conv.SetAdminContextAsync(user, ctx, ct);
+        await _conv.SetStateAsync(user, ConversationState.AwaitingCouponExpiry, ct);
+
+        await _msg.SendHtmlAsync(user.ChatId,
+            "📅 تاریخ انقضا را وارد کنید (مثلاً 2026-12-31):\n<i>(برای بدون انقضا، «⏭️ رد شدن» را بزنید)</i>",
+            await _kb.BuildSkipCancelKeyboardAsync(lang), ct);
+    }
+
+    // Coupon wizard: Step 4 — expiry → create
+    private async Task HandleAdminCouponExpiryAsync(Message message, TelegramUser user, CancellationToken ct)
+    {
+        var lang = user.PreferredLanguage;
+        var text = message.Text?.Trim();
+        DateTime? expiresAt = null;
+
+        if (text != "⏭️ رد شدن")
+        {
+            if (!DateTime.TryParse(text, out var dt))
+            {
+                await _msg.SendHtmlAsync(user.ChatId, "❌ فرمت تاریخ نامعتبر است. مثلاً: 2026-12-31", ct: ct);
+                return;
+            }
+            expiresAt = DateTime.SpecifyKind(dt.Date.AddDays(1).AddSeconds(-1), DateTimeKind.Utc);
+        }
+
+        var ctx = await _conv.GetAdminContextAsync(user) ?? new AdminContext();
+        await _conv.ClearStateAsync(user, ct);
+
+        if (ctx.PendingCouponCode is null || ctx.PendingCouponDiscountType is null || ctx.PendingCouponDiscountValue is null)
+        {
+            await _msg.SendHtmlAsync(user.ChatId, "❌ اطلاعات کوپن ناقص است. دوباره تلاش کنید.",
+                await _kb.BuildAdminMenuAsync(lang), ct);
+            return;
+        }
+
+        var discountType = ctx.PendingCouponDiscountType == "pct"
+            ? DiscountType.Percentage
+            : DiscountType.Fixed;
+
+        var result = await _couponService.CreateAsync(
+            ctx.PendingCouponCode, discountType, ctx.PendingCouponDiscountValue.Value,
+            null, ctx.PendingCouponMaxUses, expiresAt);
+
+        if (result.IsSuccess)
+        {
+            var coupon = result.Data!;
+            var typeLabel = discountType == DiscountType.Percentage ? "درصدی" : "مبلغ ثابت";
+            await _audit.LogAsync(user.Id, AuditAction.CreateCoupon, "Coupon", coupon.Id, coupon.Code);
+            await _msg.SendHtmlAsync(user.ChatId,
+                $"✅ <b>کوپن ایجاد شد!</b>\n\n" +
+                $"🔖 کد: <code>{HtmlSanitizer.Encode(coupon.Code)}</code>\n" +
+                $"📊 نوع: {typeLabel}\n" +
+                $"💰 مقدار: {coupon.DiscountValue:F0}" + (discountType == DiscountType.Percentage ? "%" : " تومان") + "\n" +
+                (coupon.MaxUses.HasValue ? $"🔢 حداکثر استفاده: {coupon.MaxUses}\n" : "🔢 نامحدود\n") +
+                (coupon.ExpiresAt.HasValue ? $"📅 انقضا: {coupon.ExpiresAt.Value:yyyy-MM-dd}" : "📅 بدون انقضا"),
+                await _kb.BuildAdminMenuAsync(lang), ct);
+        }
+        else
+        {
+            await _msg.SendHtmlAsync(user.ChatId, $"❌ {result.ErrorMessage}",
+                await _kb.BuildAdminMenuAsync(lang), ct);
+        }
+    }
+
+    // User checkout: apply coupon
+    private async Task HandleApplyCouponAsync(Message message, TelegramUser user, CancellationToken ct)
+    {
+        var lang = user.PreferredLanguage;
+        var text = message.Text?.Trim();
+
+        if (text == "⏭️ بدون تخفیف" || text == "🎟 کد تخفیف دارم")
+        {
+            if (text == "🎟 کد تخفیف دارم")
+            {
+                await _msg.SendHtmlAsync(user.ChatId,
+                    "🎟 کد تخفیف خود را وارد کنید:",
+                    await _kb.BuildCancelKeyboardAsync(lang), ct);
+                return;
+            }
+            // Skip coupon → go to receipt step
+            await _conv.SetStateAsync(user, ConversationState.AwaitingReceipt, ct);
+            var ctx = await _conv.GetOrderContextAsync(user);
+            if (ctx is not null) await ShowPaymentInstructionsAsync(user, ctx, ct);
+            return;
+        }
+
+        // Treat input as coupon code
+        var couponCode = text ?? string.Empty;
+        var orderCtx = await _conv.GetOrderContextAsync(user);
+        if (orderCtx is null)
+        {
+            await _conv.ClearStateAsync(user, ct);
+            await _msg.SendHtmlAsync(user.ChatId,
+                await _texts.GetAsync("Errors.SessionExpired", lang, "❌ نشست منقضی شد. دوباره شروع کنید."), ct: ct);
+            return;
+        }
+
+        var orderAmount = orderCtx.ProductPrice * orderCtx.Quantity;
+        var validation = await _couponService.ValidateAsync(couponCode, user.Id, orderAmount);
+        if (!validation.IsSuccess)
+        {
+            await _msg.SendHtmlAsync(user.ChatId,
+                $"❌ {validation.ErrorMessage}\n\nدوباره کد وارد کنید یا «⏭️ بدون تخفیف» را بزنید:",
+                await _kb.BuildCouponOrSkipKeyboardAsync(lang), ct);
+            return;
+        }
+
+        var vr = validation.Data!;
+        orderCtx.CouponCode = vr.Coupon.Code;
+        orderCtx.DiscountAmount = vr.DiscountAmount;
+        await _conv.SetOrderContextAsync(user, orderCtx, ct);
+        await _conv.SetStateAsync(user, ConversationState.AwaitingReceipt, ct);
+
+        var discountedTotal = Math.Max(0, orderAmount - vr.DiscountAmount);
+        await _msg.SendHtmlAsync(user.ChatId,
+            $"✅ <b>کد تخفیف اعمال شد!</b>\n" +
+            $"🔖 کد: <code>{HtmlSanitizer.Encode(vr.Coupon.Code)}</code>\n" +
+            $"💸 تخفیف: <b>{vr.DiscountAmount:F0} تومان</b>\n" +
+            $"💰 مبلغ نهایی: <b>{discountedTotal:F0} تومان</b>\n\n" +
+            "📸 حالا رسید پرداخت را ارسال کنید:", ct: ct);
+        await ShowPaymentInstructionsAsync(user, orderCtx, ct);
+    }
+
+    private async Task ShowAffiliateAsync(TelegramUser user, CancellationToken ct)
+    {
+        var lang = user.PreferredLanguage;
+        var planAllowsAffiliate = false;
+        if (_tenantContext.IsSet)
+        {
+            var tenant = await _uow.Tenants.GetByIdAsync(_tenantContext.TenantId);
+            planAllowsAffiliate = tenant?.Plan?.AllowsAffiliate ?? false;
+        }
+
+        if (!planAllowsAffiliate)
+        {
+            await _msg.SendHtmlAsync(user.ChatId,
+                "❌ این قابلیت در پلن فعلی شما در دسترس نیست.", ct: ct);
+            return;
+        }
+
+        var result = await _affiliateService.GetOrCreateAffiliateAsync(user.Id);
+        if (!result.IsSuccess)
+        {
+            await _msg.SendHtmlAsync(user.ChatId, $"❌ {result.ErrorMessage}", ct: ct);
+            return;
+        }
+
+        var affiliate = result.Data!;
+        await _audit.LogAsync(user.Id, AuditAction.CreateAffiliate, "Affiliate", affiliate.Id, "Affiliate viewed/created");
+
+        await _msg.SendHtmlAsync(user.ChatId,
+            $"🔗 <b>لینک معرفی شما</b>\n\n" +
+            $"هر کاربری که با لینک شما ثبت‌نام کند، به کیف پول شما اعتبار هدیه تعلق می‌گیرد.\n\n" +
+            $"لینک شما:\n<code>https://t.me/{(await _uow.BotSettings.GetValueAsync("BotUsername") ?? "bot")}?start=ref_{affiliate.ReferralCode}</code>\n\n" +
+            $"📊 معرفی‌های موفق: <b>{affiliate.TotalReferrals}</b>\n" +
+            $"💰 درآمد کل: <b>{affiliate.TotalEarnings:F0} تومان</b>",
+            ct: ct);
+    }
+
+    // Shared helper: show payment card and instructions
+    private async Task ShowPaymentInstructionsAsync(TelegramUser user, OrderContext ctx, CancellationToken ct)
+    {
+        var lang = user.PreferredLanguage;
+        var cardResult = await _paymentService.GetActivePaymentCardAsync();
+        var cardInfo = cardResult.IsSuccess
+            ? $"💳 کارت: <code>{cardResult.Data!.CardNumber}</code>\n👤 {HtmlSanitizer.Encode(cardResult.Data.CardHolderName)}\n🏦 {HtmlSanitizer.Encode(cardResult.Data.BankName)}"
+            : "💳 برای اطلاعات پرداخت با پشتیبانی تماس بگیرید.";
+
+        var finalAmount = Math.Max(0, ctx.ProductPrice * ctx.Quantity - ctx.DiscountAmount);
+        var instruction = await _texts.FormatAsync("PaymentInstructionMessage", lang,
+            new() { ["amount"] = $"{finalAmount:F0} تومان" },
+            $"💳 مبلغ <b>{finalAmount:F0} تومان</b> را واریز کرده و رسید را ارسال کنید.");
+
+        await _msg.SendHtmlAsync(user.ChatId,
+            $"{cardInfo}\n\n{instruction}\n\n📸 حالا رسید را ارسال کنید:",
+            await _kb.BuildCancelKeyboardAsync(lang), ct);
     }
 
     // ─── Helpers ─────────────────────────────────────────────────────────────

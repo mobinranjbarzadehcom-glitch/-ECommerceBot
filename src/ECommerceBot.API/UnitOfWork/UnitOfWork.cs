@@ -26,6 +26,10 @@ public class UnitOfWork : IUnitOfWork
     private IPaymentCardRepository? _paymentCards;
     private IAuditLogRepository? _auditLogs;
     private ILicenseRepository? _licenses;
+    private ICouponRepository? _coupons;
+    private ICouponUsageRepository? _couponUsages;
+    private IAffiliateRepository? _affiliates;
+    private IAffiliateReferralRepository? _affiliateReferrals;
 
     public UnitOfWork(AppDbContext context)
     {
@@ -79,6 +83,18 @@ public class UnitOfWork : IUnitOfWork
 
     public ILicenseRepository Licenses =>
         _licenses ??= new LicenseRepository(_context);
+
+    public ICouponRepository Coupons =>
+        _coupons ??= new CouponRepository(_context);
+
+    public ICouponUsageRepository CouponUsages =>
+        _couponUsages ??= new CouponUsageRepository(_context);
+
+    public IAffiliateRepository Affiliates =>
+        _affiliates ??= new AffiliateRepository(_context);
+
+    public IAffiliateReferralRepository AffiliateReferrals =>
+        _affiliateReferrals ??= new AffiliateReferralRepository(_context);
 
     public async Task<int> SaveChangesAsync(CancellationToken cancellationToken = default) =>
         await _context.SaveChangesAsync(cancellationToken);

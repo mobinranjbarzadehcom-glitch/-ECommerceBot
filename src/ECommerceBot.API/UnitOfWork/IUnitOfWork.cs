@@ -20,6 +20,10 @@ public interface IUnitOfWork : IDisposable
     IPaymentCardRepository PaymentCards { get; }
     IAuditLogRepository AuditLogs { get; }
     ILicenseRepository Licenses { get; }
+    ICouponRepository Coupons { get; }
+    ICouponUsageRepository CouponUsages { get; }
+    IAffiliateRepository Affiliates { get; }
+    IAffiliateReferralRepository AffiliateReferrals { get; }
 
     Task<int> SaveChangesAsync(CancellationToken cancellationToken = default);
     Task BeginTransactionAsync();

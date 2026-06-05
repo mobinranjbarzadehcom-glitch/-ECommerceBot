@@ -26,8 +26,12 @@ public class Tenant : BaseEntity
     public int MaxUsers { get; set; } = 500;
     public int MaxProducts { get; set; } = 50;
     public int MaxAdmins { get; set; } = 2;
+    public int MaxOrdersPerMonth { get; set; } = 200;
 
     public long? OwnerTelegramId { get; set; }
+
+    // Tracks which expiry reminders have already been sent (e.g. "7,3,1").
+    public string? ExpiryRemindersSent { get; set; }
 
     public SubscriptionPlan? Plan { get; set; }
 }
