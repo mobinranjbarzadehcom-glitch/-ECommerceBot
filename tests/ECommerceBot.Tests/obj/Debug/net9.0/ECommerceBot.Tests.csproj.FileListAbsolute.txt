@@ -161,3 +161,4 @@ c:\Users\mobin\OneDrive\Desktop\ECommerceBot\tests\ECommerceBot.Tests\bin\Debug\
 C:\Users\mobin\OneDrive\Desktop\ECommerceBot\tests\ECommerceBot.Tests\bin\Debug\net9.0\Microsoft.Extensions.Caching.StackExchangeRedis.dll
 C:\Users\mobin\OneDrive\Desktop\ECommerceBot\tests\ECommerceBot.Tests\bin\Debug\net9.0\Pipelines.Sockets.Unofficial.dll
 C:\Users\mobin\OneDrive\Desktop\ECommerceBot\tests\ECommerceBot.Tests\bin\Debug\net9.0\StackExchange.Redis.dll
+C:\Users\mobin\OneDrive\Desktop\ECommerceBot\tests\ECommerceBot.Tests\obj\Debug\net9.0\ECommerceBot.Tests.sourcelink.json

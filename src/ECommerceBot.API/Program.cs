@@ -194,6 +194,7 @@ try
 
     // ── Web ───────────────────────────────────────────────────────────────────
     builder.Services.AddControllers();
+    builder.Services.ConfigureTelegramBotMvc();
     builder.Services.AddEndpointsApiExplorer();
 
     var app = builder.Build();
