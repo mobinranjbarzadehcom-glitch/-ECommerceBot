@@ -175,6 +175,7 @@ try
     builder.Services.AddScoped<IKeyboardBuilder, KeyboardBuilder>();
     builder.Services.AddScoped<IMessageHandler, MessageHandler>();
     builder.Services.AddScoped<ICallbackQueryHandler, CallbackQueryHandler>();
+    builder.Services.AddScoped<ISuperAdminHandler, SuperAdminHandler>();
     builder.Services.AddScoped<IUpdateDispatcher, UpdateDispatcher>();
 
     // ── Rate Limiting ─────────────────────────────────────────────────────────

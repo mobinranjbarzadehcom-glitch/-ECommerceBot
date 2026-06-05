@@ -1,5 +1,7 @@
 using ECommerceBot.API.Telegram.Handlers;
+using ECommerceBot.API.Telegram.Options;
 using ECommerceBot.API.UnitOfWork;
+using Microsoft.Extensions.Options;
 using Telegram.Bot.Types;
 using Telegram.Bot.Types.Enums;
 
@@ -10,17 +12,23 @@ public class UpdateDispatcher : IUpdateDispatcher
     private readonly IUnitOfWork _uow;
     private readonly IMessageHandler _messageHandler;
     private readonly ICallbackQueryHandler _callbackHandler;
+    private readonly ISuperAdminHandler _superAdminHandler;
+    private readonly long[] _superAdminIds;
     private readonly ILogger<UpdateDispatcher> _logger;
 
     public UpdateDispatcher(
         IUnitOfWork uow,
         IMessageHandler messageHandler,
         ICallbackQueryHandler callbackHandler,
+        ISuperAdminHandler superAdminHandler,
+        IOptions<TelegramOptions> opts,
         ILogger<UpdateDispatcher> logger)
     {
         _uow = uow;
         _messageHandler = messageHandler;
         _callbackHandler = callbackHandler;
+        _superAdminHandler = superAdminHandler;
+        _superAdminIds = opts.Value.SuperAdminChatIds;
         _logger = logger;
     }
 
@@ -52,6 +60,12 @@ public class UpdateDispatcher : IUpdateDispatcher
         var telegramId = message.From?.Id;
         if (telegramId is null) return;
 
+        if (IsSuperAdmin(telegramId.Value))
+        {
+            await _superAdminHandler.HandleMessageAsync(message, ct);
+            return;
+        }
+
         var user = await _uow.Users.GetByTelegramIdAsync(telegramId.Value);
         await _messageHandler.HandleAsync(message, user, ct);
     }
@@ -59,8 +73,14 @@ public class UpdateDispatcher : IUpdateDispatcher
     private async Task DispatchCallbackQueryAsync(CallbackQuery callbackQuery, CancellationToken ct)
     {
         var telegramId = callbackQuery.From.Id;
-        var user = await _uow.Users.GetByTelegramIdAsync(telegramId);
 
+        if (IsSuperAdmin(telegramId))
+        {
+            await _superAdminHandler.HandleCallbackAsync(callbackQuery, ct);
+            return;
+        }
+
+        var user = await _uow.Users.GetByTelegramIdAsync(telegramId);
         if (user is null)
         {
             _logger.LogWarning("Callback from unknown user {TelegramId}", telegramId);
@@ -69,4 +89,7 @@ public class UpdateDispatcher : IUpdateDispatcher
 
         await _callbackHandler.HandleAsync(callbackQuery, user, ct);
     }
+
+    private bool IsSuperAdmin(long telegramId) =>
+        _superAdminIds.Length > 0 && Array.IndexOf(_superAdminIds, telegramId) >= 0;
 }

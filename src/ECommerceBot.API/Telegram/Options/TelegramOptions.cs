@@ -12,4 +12,7 @@ public class TelegramOptions
 
     /// <summary>Slug for the default (legacy single-bot) tenant.</summary>
     public string DefaultTenantSlug { get; set; } = "default";
+
+    /// <summary>Public base URL used to auto-register webhooks for new tenants. E.g. https://bot.example.com</summary>
+    public string WebhookBaseUrl { get; set; } = string.Empty;
 }
