@@ -12,4 +12,5 @@ public interface ITelegramMessageService
     Task NotifyAdminsAsync(string html, InlineKeyboardMarkup? markup = null, CancellationToken ct = default);
     Task NotifyAdminsWithPhotoAsync(string fileId, string caption, InlineKeyboardMarkup? markup = null, CancellationToken ct = default);
     Task ForwardToBackupAsync(long fromChatId, int messageId, CancellationToken ct = default);
+    Task SendDocumentAsync(long chatId, byte[] content, string filename, string? caption = null, CancellationToken ct = default);
 }

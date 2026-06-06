@@ -42,15 +42,18 @@ public class KeyboardBuilder : IKeyboardBuilder
         var userView   = await _texts.GetAsync("AdminMenu.UserViewButton",   lang, "👁 مشاهده مثل کاربر");
         var license    = await _texts.GetAsync("AdminMenu.LicenseButton",    lang, "🔐 وضعیت لایسنس");
         var coupons    = await _texts.GetAsync("AdminMenu.CouponsButton",    lang, "🎟 کوپن‌ها");
+        var broadcast  = await _texts.GetAsync("AdminMenu.BroadcastButton",  lang, "📢 پیام همگانی");
+        var export     = await _texts.GetAsync("AdminMenu.ExportButton",     lang, "📤 خروجی CSV");
 
         return new ReplyKeyboardMarkup(new[]
         {
-            new[] { new KeyboardButton(orders),   new KeyboardButton(users) },
-            new[] { new KeyboardButton(products), new KeyboardButton(categories) },
-            new[] { new KeyboardButton(cards),    new KeyboardButton(settings) },
-            new[] { new KeyboardButton(stats),    new KeyboardButton(admins) },
-            new[] { new KeyboardButton(userView), new KeyboardButton(license) },
-            new[] { new KeyboardButton(coupons) }
+            new[] { new KeyboardButton(orders),    new KeyboardButton(users) },
+            new[] { new KeyboardButton(products),  new KeyboardButton(categories) },
+            new[] { new KeyboardButton(cards),     new KeyboardButton(settings) },
+            new[] { new KeyboardButton(stats),     new KeyboardButton(admins) },
+            new[] { new KeyboardButton(userView),  new KeyboardButton(license) },
+            new[] { new KeyboardButton(coupons) },
+            new[] { new KeyboardButton(broadcast), new KeyboardButton(export) }
         })
         { ResizeKeyboard = true };
     }
@@ -200,4 +203,14 @@ public class KeyboardBuilder : IKeyboardBuilder
         })
         { ResizeKeyboard = true };
     }
+
+    public InlineKeyboardMarkup BuildExportKeyboard() =>
+        new InlineKeyboardMarkup(new[]
+        {
+            new[]
+            {
+                InlineKeyboardButton.WithCallbackData("📦 خروجی سفارش‌ها", "adm:export:orders"),
+                InlineKeyboardButton.WithCallbackData("👥 خروجی کاربران",  "adm:export:users")
+            }
+        });
 }

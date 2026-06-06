@@ -41,4 +41,7 @@ public enum ConversationState
 
     // User coupon at checkout
     AwaitingApplyCoupon = 70,
+
+    // Admin broadcast
+    AwaitingBroadcastMessage = 80,
 }

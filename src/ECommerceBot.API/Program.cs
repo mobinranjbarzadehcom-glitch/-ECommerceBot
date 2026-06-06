@@ -143,6 +143,9 @@ try
     builder.Services.AddScoped<IUserService, UserService>();
     builder.Services.AddScoped<ICouponService, CouponService>();
     builder.Services.AddScoped<IAffiliateService, AffiliateService>();
+    builder.Services.AddScoped<IBroadcastService, BroadcastService>();
+    builder.Services.AddScoped<IExportService, ExportService>();
+    builder.Services.AddScoped<IAiSupportService, AiSupportService>();
     builder.Services.AddScoped<ISettingService, SettingService>();
     builder.Services.AddScoped<IPaymentService, PaymentService>();
     builder.Services.AddScoped<IOrderService, OrderService>();

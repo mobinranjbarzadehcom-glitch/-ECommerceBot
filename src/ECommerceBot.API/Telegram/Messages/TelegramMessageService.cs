@@ -116,4 +116,21 @@ public class TelegramMessageService : ITelegramMessageService
             _logger.LogError(ex, "Failed to forward message to backup channel");
         }
     }
+
+    public async Task SendDocumentAsync(long chatId, byte[] content, string filename, string? caption = null, CancellationToken ct = default)
+    {
+        try
+        {
+            using var stream = new MemoryStream(content);
+            await _bot.SendDocument(
+                chatId: chatId,
+                document: TgTypes.InputFile.FromStream(stream, filename),
+                caption: caption,
+                cancellationToken: ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to send document '{Filename}' to {ChatId}", filename, chatId);
+        }
+    }
 }

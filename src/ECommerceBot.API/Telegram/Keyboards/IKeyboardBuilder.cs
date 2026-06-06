@@ -19,4 +19,5 @@ public interface IKeyboardBuilder
     InlineKeyboardMarkup BuildCategoryPickerKeyboard(IEnumerable<(int Id, string Name)> categories, string callbackPrefix);
     InlineKeyboardMarkup BuildCouponDiscountTypeKeyboard();
     Task<ReplyKeyboardMarkup> BuildCouponOrSkipKeyboardAsync(string lang = "fa");
+    InlineKeyboardMarkup BuildExportKeyboard();
 }

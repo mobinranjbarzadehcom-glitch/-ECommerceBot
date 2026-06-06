@@ -31,6 +31,7 @@ public class CallbackQueryHandler : ICallbackQueryHandler
     private readonly IRateLimitService _rateLimit;
     private readonly ICouponService _couponService;
     private readonly ITenantContext _tenantContext;
+    private readonly IExportService _exportService;
     private readonly ILicenseService _licenseService;
     private readonly IServerFingerprintService _fingerprintService;
     private readonly ILogger<CallbackQueryHandler> _logger;
@@ -49,6 +50,7 @@ public class CallbackQueryHandler : ICallbackQueryHandler
         IRateLimitService rateLimit,
         ICouponService couponService,
         ITenantContext tenantContext,
+        IExportService exportService,
         ILicenseService licenseService,
         IServerFingerprintService fingerprintService,
         ILogger<CallbackQueryHandler> logger)
@@ -66,6 +68,7 @@ public class CallbackQueryHandler : ICallbackQueryHandler
         _rateLimit = rateLimit;
         _couponService = couponService;
         _tenantContext = tenantContext;
+        _exportService = exportService;
         _licenseService = licenseService;
         _fingerprintService = fingerprintService;
         _logger = logger;
@@ -422,7 +425,8 @@ public class CallbackQueryHandler : ICallbackQueryHandler
             case "card": await HandleAdminCardCallbackAsync(idStr, parts, user, chatId, ct); break;
             case "set":  await HandleAdminSettingCallbackAsync(idStr, parts, user, chatId, ct); break;
             case "mgr":  await HandleAdminManagementCallbackAsync(idStr, parts, user, chatId, ct); break;
-            case "cpn":  await HandleAdminCouponCallbackAsync(idStr, parts, user, chatId, ct); break;
+            case "cpn":    await HandleAdminCouponCallbackAsync(idStr, parts, user, chatId, ct); break;
+            case "export": await HandleAdminExportCallbackAsync(idStr, user, chatId, ct); break;
         }
     }
 
@@ -813,6 +817,36 @@ public class CallbackQueryHandler : ICallbackQueryHandler
                 new[] { InlineKeyboardButton.WithCallbackData("🔑 افزودن کلید", $"adm:prod:{product.Id}:keys") },
                 new[] { InlineKeyboardButton.WithCallbackData("⬅️ بازگشت به محصولات", "adm:prod:list") }
             }), ct);
+    }
+
+    // ─── Admin export callbacks ──────────────────────────────────────────────
+
+    private async Task HandleAdminExportCallbackAsync(string? idStr, TelegramUser user, long chatId, CancellationToken ct)
+    {
+        switch (idStr)
+        {
+            case "orders":
+            {
+                await _msg.SendHtmlAsync(chatId, "⏳ در حال تهیه خروجی سفارش‌ها...", ct: ct);
+                var csv = await _exportService.ExportOrdersCsvAsync();
+                var filename = $"orders_{DateTime.UtcNow:yyyyMMdd_HHmmss}.csv";
+                await _msg.SendDocumentAsync(chatId, csv, filename, "📦 خروجی سفارش‌ها", ct);
+                await _audit.LogAsync(user.Id, AuditAction.ExportOrders, "Order", null);
+                break;
+            }
+            case "users":
+            {
+                await _msg.SendHtmlAsync(chatId, "⏳ در حال تهیه خروجی کاربران...", ct: ct);
+                var csv = await _exportService.ExportUsersCsvAsync();
+                var filename = $"users_{DateTime.UtcNow:yyyyMMdd_HHmmss}.csv";
+                await _msg.SendDocumentAsync(chatId, csv, filename, "👥 خروجی کاربران", ct);
+                await _audit.LogAsync(user.Id, AuditAction.ExportUsers, "User", null);
+                break;
+            }
+            default:
+                await _msg.SendHtmlAsync(chatId, "❌ عملیات نامعتبر.", null, ct);
+                break;
+        }
     }
 
     // ─── Admin coupon callbacks ──────────────────────────────────────────────

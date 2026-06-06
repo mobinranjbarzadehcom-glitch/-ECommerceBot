@@ -34,4 +34,7 @@ public static class AuditAction
     public const string ApplyCoupon = "ApplyCoupon";
     public const string CreateAffiliate = "CreateAffiliate";
     public const string TrackReferral = "TrackReferral";
+    public const string BroadcastMessage = "BroadcastMessage";
+    public const string ExportOrders = "ExportOrders";
+    public const string ExportUsers = "ExportUsers";
 }

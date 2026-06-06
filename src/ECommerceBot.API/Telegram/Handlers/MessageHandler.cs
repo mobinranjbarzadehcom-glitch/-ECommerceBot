@@ -36,6 +36,9 @@ public class MessageHandler : IMessageHandler
     private readonly ICouponService _couponService;
     private readonly IAffiliateService _affiliateService;
     private readonly ITenantContext _tenantContext;
+    private readonly IBroadcastService _broadcastService;
+    private readonly IExportService _exportService;
+    private readonly IAiSupportService _aiSupportService;
     private readonly ILicenseService _licenseService;
     private readonly IServerFingerprintService _fingerprintService;
     private readonly ILogger<MessageHandler> _logger;
@@ -57,6 +60,9 @@ public class MessageHandler : IMessageHandler
         ICouponService couponService,
         IAffiliateService affiliateService,
         ITenantContext tenantContext,
+        IBroadcastService broadcastService,
+        IExportService exportService,
+        IAiSupportService aiSupportService,
         ILicenseService licenseService,
         IServerFingerprintService fingerprintService,
         ILogger<MessageHandler> logger)
@@ -77,6 +83,9 @@ public class MessageHandler : IMessageHandler
         _couponService = couponService;
         _affiliateService = affiliateService;
         _tenantContext = tenantContext;
+        _broadcastService = broadcastService;
+        _exportService = exportService;
+        _aiSupportService = aiSupportService;
         _licenseService = licenseService;
         _fingerprintService = fingerprintService;
         _logger = logger;
@@ -409,6 +418,9 @@ public class MessageHandler : IMessageHandler
             case ConversationState.AwaitingCouponExpiry:
                 await HandleAdminCouponExpiryAsync(message, user, ct);
                 break;
+            case ConversationState.AwaitingBroadcastMessage:
+                await HandleBroadcastMessageAsync(message, user, ct);
+                break;
             default:
                 await _conv.ClearStateAsync(user, ct);
                 await ShowMenuAsync(user, ct);
@@ -562,11 +574,26 @@ public class MessageHandler : IMessageHandler
         await _conv.ClearStateAsync(user, ct);
 
         if (result.IsSuccess)
+        {
             await _msg.SendHtmlAsync(user.ChatId,
                 await _texts.FormatAsync("Ticket.CreatedSuccess", lang,
                     new() { ["ticketId"] = result.Data!.Id.ToString() },
                     $"✅ <b>Ticket #{result.Data!.Id} created!</b> We'll respond soon."),
                 await _kb.BuildMainMenuAsync(lang), ct);
+
+            // AI auto-reply: only when plan allows it
+            if (_tenantContext.IsSet)
+            {
+                var tenant = await _uow.Tenants.GetByIdAsync(_tenantContext.TenantId);
+                if (tenant?.Plan?.AllowsAiSupport == true)
+                {
+                    var autoReply = await _aiSupportService.GetAutoReplyAsync(text);
+                    if (autoReply is not null)
+                        await _msg.SendHtmlAsync(user.ChatId,
+                            $"🤖 <b>پاسخ خودکار:</b>\n\n{autoReply}", ct: ct);
+                }
+            }
+        }
         else
             await _msg.SendHtmlAsync(user.ChatId, $"❌ {result.ErrorMessage}", ct: ct);
     }
@@ -588,6 +615,8 @@ public class MessageHandler : IMessageHandler
         var userView      = await _texts.GetAsync("AdminMenu.UserViewButton",   lang, "👁 مشاهده مثل کاربر");
         var license       = await _texts.GetAsync("AdminMenu.LicenseButton",    lang, "🔐 وضعیت لایسنس");
         var coupons       = await _texts.GetAsync("AdminMenu.CouponsButton",    lang, "🎟 کوپن‌ها");
+        var broadcast     = await _texts.GetAsync("AdminMenu.BroadcastButton",  lang, "📢 پیام همگانی");
+        var export        = await _texts.GetAsync("AdminMenu.ExportButton",     lang, "📤 خروجی CSV");
 
         if (text == pendingOrders) { await ShowAdminPendingOrdersAsync(user, ct); return; }
         if (text == users)         { await ShowAdminUsersAsync(user, ct); return; }
@@ -600,6 +629,8 @@ public class MessageHandler : IMessageHandler
         if (text == userView)      { await ShowUserViewAsync(user, ct); return; }
         if (text == license)       { await ShowAdminLicenseStatusAsync(user, ct); return; }
         if (text == coupons)       { await ShowAdminCouponsAsync(user, ct); return; }
+        if (text == broadcast)     { await StartBroadcastAsync(user, ct); return; }
+        if (text == export)        { await ShowExportMenuAsync(user, ct); return; }
 
         await _msg.SendHtmlAsync(user.ChatId,
             await _texts.GetAsync("Admin.UseMenu", lang, "لطفاً از دکمه‌های منو استفاده کنید."),
@@ -1522,6 +1553,57 @@ public class MessageHandler : IMessageHandler
         await _msg.SendHtmlAsync(user.ChatId,
             $"{cardInfo}\n\n{instruction}\n\n📸 حالا رسید را ارسال کنید:",
             await _kb.BuildCancelKeyboardAsync(lang), ct);
+    }
+
+    // ─── Phase 5: Broadcast + Export ────────────────────────────────────────
+
+    private async Task StartBroadcastAsync(TelegramUser user, CancellationToken ct)
+    {
+        var lang = user.PreferredLanguage;
+        await _conv.SetStateAsync(user, ConversationState.AwaitingBroadcastMessage, ct);
+        await _msg.SendHtmlAsync(user.ChatId,
+            "📢 <b>پیام همگانی</b>\n\n" +
+            "متن پیامی که می‌خواهید به تمام کاربران ارسال شود را وارد کنید.\n" +
+            "<i>فرمت HTML پشتیبانی می‌شود (مثلاً &lt;b&gt;متن&lt;/b&gt;)</i>",
+            await _kb.BuildCancelKeyboardAsync(lang), ct);
+    }
+
+    private async Task HandleBroadcastMessageAsync(Message message, TelegramUser user, CancellationToken ct)
+    {
+        var lang = user.PreferredLanguage;
+        var text = message.Text?.Trim();
+        await _conv.ClearStateAsync(user, ct);
+
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            await _msg.SendHtmlAsync(user.ChatId,
+                "❌ متن پیام نمی‌تواند خالی باشد.",
+                await _kb.BuildAdminMenuAsync(lang), ct);
+            return;
+        }
+
+        await _msg.SendHtmlAsync(user.ChatId,
+            "⏳ در حال ارسال پیام همگانی...", ct: ct);
+
+        var result = await _broadcastService.SendBroadcastAsync(text, ct);
+        await _audit.LogAsync(user.Id, AuditAction.BroadcastMessage, "Broadcast", null,
+            $"Sent={result.Data}, Preview={text[..Math.Min(50, text.Length)]}");
+
+        if (result.IsSuccess)
+            await _msg.SendHtmlAsync(user.ChatId,
+                $"✅ <b>پیام همگانی ارسال شد!</b>\n\n📨 تحویل داده شده به <b>{result.Data}</b> کاربر.",
+                await _kb.BuildAdminMenuAsync(lang), ct);
+        else
+            await _msg.SendHtmlAsync(user.ChatId,
+                $"❌ {result.ErrorMessage}",
+                await _kb.BuildAdminMenuAsync(lang), ct);
+    }
+
+    private async Task ShowExportMenuAsync(TelegramUser user, CancellationToken ct)
+    {
+        await _msg.SendHtmlAsync(user.ChatId,
+            "📤 <b>خروجی CSV</b>\n\nچه داده‌ای را می‌خواهید دریافت کنید؟",
+            _kb.BuildExportKeyboard(), ct);
     }
 
     // ─── Helpers ─────────────────────────────────────────────────────────────
