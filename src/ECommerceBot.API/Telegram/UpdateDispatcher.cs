@@ -1,3 +1,4 @@
+using ECommerceBot.API.Infrastructure.Multitenancy;
 using ECommerceBot.API.Telegram.Handlers;
 using ECommerceBot.API.Telegram.Options;
 using ECommerceBot.API.UnitOfWork;
@@ -10,6 +11,7 @@ namespace ECommerceBot.API.Telegram;
 public class UpdateDispatcher : IUpdateDispatcher
 {
     private readonly IUnitOfWork _uow;
+    private readonly ITenantContext _tenantContext;
     private readonly IMessageHandler _messageHandler;
     private readonly ICallbackQueryHandler _callbackHandler;
     private readonly ISuperAdminHandler _superAdminHandler;
@@ -18,6 +20,7 @@ public class UpdateDispatcher : IUpdateDispatcher
 
     public UpdateDispatcher(
         IUnitOfWork uow,
+        ITenantContext tenantContext,
         IMessageHandler messageHandler,
         ICallbackQueryHandler callbackHandler,
         ISuperAdminHandler superAdminHandler,
@@ -25,6 +28,7 @@ public class UpdateDispatcher : IUpdateDispatcher
         ILogger<UpdateDispatcher> logger)
     {
         _uow = uow;
+        _tenantContext = tenantContext;
         _messageHandler = messageHandler;
         _callbackHandler = callbackHandler;
         _superAdminHandler = superAdminHandler;
@@ -60,7 +64,11 @@ public class UpdateDispatcher : IUpdateDispatcher
         var telegramId = message.From?.Id;
         if (telegramId is null) return;
 
-        if (IsSuperAdmin(telegramId.Value))
+        // Route to the SuperAdmin panel only when the update arrived via the platform bot
+        // (legacy endpoint, TenantContext not set). If TenantContext IS set the update came
+        // through a specific tenant webhook — even a SuperAdmin must be handled as a tenant
+        // user so that they interact with that tenant, not the platform panel.
+        if (IsSuperAdmin(telegramId.Value) && !_tenantContext.IsSet)
         {
             await _superAdminHandler.HandleMessageAsync(message, ct);
             return;
@@ -74,7 +82,7 @@ public class UpdateDispatcher : IUpdateDispatcher
     {
         var telegramId = callbackQuery.From.Id;
 
-        if (IsSuperAdmin(telegramId))
+        if (IsSuperAdmin(telegramId) && !_tenantContext.IsSet)
         {
             await _superAdminHandler.HandleCallbackAsync(callbackQuery, ct);
             return;

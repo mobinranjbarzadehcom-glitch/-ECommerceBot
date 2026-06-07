@@ -522,6 +522,13 @@ public class SuperAdminHandler : ISuperAdminHandler
         var urlMatch = expectedUrl != null && actualUrl != null &&
                        string.Equals(expectedUrl, actualUrl, StringComparison.OrdinalIgnoreCase);
 
+        // The legacy platform endpoint — a tenant must NEVER be registered here
+        var legacyPlatformUrl = !string.IsNullOrWhiteSpace(_opts.WebhookBaseUrl)
+            ? $"{_opts.WebhookBaseUrl.TrimEnd('/')}/api/telegram/webhook"
+            : null;
+        var isOnLegacyEndpoint = legacyPlatformUrl != null && !string.IsNullOrEmpty(actualUrl) &&
+                                 string.Equals(actualUrl, legacyPlatformUrl, StringComparison.OrdinalIgnoreCase);
+
         var sb = new StringBuilder();
         sb.AppendLine("🔍 <b>گزارش تشخیص وب‌هوک</b>");
         sb.AppendLine("━━━━━━━━━━━━━━━━━━━━━━━━");
@@ -549,6 +556,9 @@ public class SuperAdminHandler : ISuperAdminHandler
             sb.AppendLine("⚠️ نتیجه: WebhookBaseUrl در تنظیمات سرور خالی است");
         else if (string.IsNullOrEmpty(actualUrl))
             sb.AppendLine("❌ نتیجه: وب‌هوک در تلگرام ثبت نشده — دکمه «تنظیم وب‌هوک» را بزنید");
+        else if (isOnLegacyEndpoint)
+            sb.AppendLine("🚨 <b>خطای بحرانی:</b> وب‌هوک این ربات روی اندپوینت پلتفرم (لگسی) ثبت شده!\n" +
+                          "پیام‌های مشتریان به <b>ربات اصلی پلتفرم</b> می‌رسند، نه این ربات!");
         else if (urlMatch)
             sb.AppendLine("✅ نتیجه: آدرس‌ها یکسان هستند");
         else
@@ -572,6 +582,10 @@ public class SuperAdminHandler : ISuperAdminHandler
             sb.AppendLine("🔧 <b>راه‌حل:</b> دکمه «تنظیم وب‌هوک» را بزنید تا IsActive هم فعال شود.");
         else if (!tokenValid)
             sb.AppendLine("🔧 <b>راه‌حل:</b> توکن ربات نامعتبر است. از پنل مشتری توکن را بررسی کنید.");
+        else if (isOnLegacyEndpoint)
+            sb.AppendLine("🚨 <b>اقدام فوری:</b> وب‌هوک را مجدداً ثبت کنید!\n" +
+                          "دکمه «تنظیم مجدد وب‌هوک» را بزنید تا اندپوینت صحیح ثبت شود:\n" +
+                          $"<code>{expectedUrl}</code>");
         else if (string.IsNullOrEmpty(actualUrl) || !urlMatch)
             sb.AppendLine("🔧 <b>راه‌حل:</b> دکمه «تنظیم وب‌هوک» را بزنید.");
         else if (!string.IsNullOrEmpty(lastError))
@@ -936,6 +950,11 @@ public class SuperAdminHandler : ISuperAdminHandler
                 await newClient.SetWebhook(webhookUrl, secretToken: webhookSecret, cancellationToken: ct);
                 webhookSet = true;
                 _logger.LogInformation("Webhook set for new tenant {Slug}: {Url}", slug, webhookUrl);
+            }
+            else
+            {
+                _logger.LogWarning("Telegram:WebhookBaseUrl is empty — webhook NOT registered for new tenant {Slug}. " +
+                                   "Bot will not receive messages until webhook is set via RetryWebhook.", slug);
             }
         }
         catch (Exception ex)
