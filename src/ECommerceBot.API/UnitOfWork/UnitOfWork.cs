@@ -30,6 +30,10 @@ public class UnitOfWork : IUnitOfWork
     private ICouponUsageRepository? _couponUsages;
     private IAffiliateRepository? _affiliates;
     private IAffiliateReferralRepository? _affiliateReferrals;
+    private ITenantNoteRepository? _tenantNotes;
+    private IRenewalRequestRepository? _renewalRequests;
+    private IScheduledBroadcastRepository? _scheduledBroadcasts;
+    private IFaqItemRepository? _faqItems;
 
     public UnitOfWork(AppDbContext context)
     {
@@ -95,6 +99,18 @@ public class UnitOfWork : IUnitOfWork
 
     public IAffiliateReferralRepository AffiliateReferrals =>
         _affiliateReferrals ??= new AffiliateReferralRepository(_context);
+
+    public ITenantNoteRepository TenantNotes =>
+        _tenantNotes ??= new TenantNoteRepository(_context);
+
+    public IRenewalRequestRepository RenewalRequests =>
+        _renewalRequests ??= new RenewalRequestRepository(_context);
+
+    public IScheduledBroadcastRepository ScheduledBroadcasts =>
+        _scheduledBroadcasts ??= new ScheduledBroadcastRepository(_context);
+
+    public IFaqItemRepository FaqItems =>
+        _faqItems ??= new FaqItemRepository(_context);
 
     public async Task<int> SaveChangesAsync(CancellationToken cancellationToken = default) =>
         await _context.SaveChangesAsync(cancellationToken);

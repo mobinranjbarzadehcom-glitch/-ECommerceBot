@@ -15,16 +15,18 @@ public class KeyboardBuilder : IKeyboardBuilder
 
     public async Task<ReplyKeyboardMarkup> BuildMainMenuAsync(string lang = "fa")
     {
-        var products = await _texts.GetAsync("MainMenu.ProductsButton", lang, "🛒 Products");
-        var wallet   = await _texts.GetAsync("MainMenu.WalletButton",   lang, "💰 Wallet");
-        var orders   = await _texts.GetAsync("MainMenu.OrdersButton",   lang, "📦 Orders");
-        var support  = await _texts.GetAsync("MainMenu.SupportButton",  lang, "🎫 Support");
-        var help     = await _texts.GetAsync("MainMenu.HelpButton",     lang, "❓ Help");
+        var products = await _texts.GetAsync("MainMenu.ProductsButton", lang, "🛒 محصولات");
+        var wallet   = await _texts.GetAsync("MainMenu.WalletButton",   lang, "💰 کیف پول");
+        var orders   = await _texts.GetAsync("MainMenu.OrdersButton",   lang, "📦 سفارش‌ها");
+        var support  = await _texts.GetAsync("MainMenu.SupportButton",  lang, "🎫 پشتیبانی");
+        var help     = await _texts.GetAsync("MainMenu.HelpButton",     lang, "❓ راهنما");
+        var faq      = await _texts.GetAsync("MainMenu.FaqButton",      lang, "💬 سوالات متداول");
 
         return new ReplyKeyboardMarkup(new[]
         {
             new[] { new KeyboardButton(products), new KeyboardButton(wallet) },
-            new[] { new KeyboardButton(orders), new KeyboardButton(support), new KeyboardButton(help) }
+            new[] { new KeyboardButton(orders),   new KeyboardButton(support) },
+            new[] { new KeyboardButton(help),     new KeyboardButton(faq) }
         })
         { ResizeKeyboard = true };
     }
@@ -42,8 +44,11 @@ public class KeyboardBuilder : IKeyboardBuilder
         var userView   = await _texts.GetAsync("AdminMenu.UserViewButton",   lang, "👁 مشاهده مثل کاربر");
         var license    = await _texts.GetAsync("AdminMenu.LicenseButton",    lang, "🔐 وضعیت لایسنس");
         var coupons    = await _texts.GetAsync("AdminMenu.CouponsButton",    lang, "🎟 کوپن‌ها");
-        var broadcast  = await _texts.GetAsync("AdminMenu.BroadcastButton",  lang, "📢 پیام همگانی");
-        var export     = await _texts.GetAsync("AdminMenu.ExportButton",     lang, "📤 خروجی CSV");
+        var broadcast  = await _texts.GetAsync("AdminMenu.BroadcastButton",      lang, "📢 پیام همگانی");
+        var export     = await _texts.GetAsync("AdminMenu.ExportButton",         lang, "📤 خروجی CSV");
+        var faq        = await _texts.GetAsync("AdminMenu.FaqButton",            lang, "❓ سوالات متداول");
+        var branding   = await _texts.GetAsync("AdminMenu.BrandingButton",       lang, "🏷 برندینگ");
+        var usage      = await _texts.GetAsync("AdminMenu.ResourceUsageButton",  lang, "📊 مصرف اشتراک");
 
         return new ReplyKeyboardMarkup(new[]
         {
@@ -53,7 +58,9 @@ public class KeyboardBuilder : IKeyboardBuilder
             new[] { new KeyboardButton(stats),     new KeyboardButton(admins) },
             new[] { new KeyboardButton(userView),  new KeyboardButton(license) },
             new[] { new KeyboardButton(coupons) },
-            new[] { new KeyboardButton(broadcast), new KeyboardButton(export) }
+            new[] { new KeyboardButton(broadcast), new KeyboardButton(export) },
+            new[] { new KeyboardButton(faq),       new KeyboardButton(branding) },
+            new[] { new KeyboardButton(usage) }
         })
         { ResizeKeyboard = true };
     }
@@ -211,6 +218,55 @@ public class KeyboardBuilder : IKeyboardBuilder
             {
                 InlineKeyboardButton.WithCallbackData("📦 خروجی سفارش‌ها", "adm:export:orders"),
                 InlineKeyboardButton.WithCallbackData("👥 خروجی کاربران",  "adm:export:users")
+            }
+        });
+
+    public InlineKeyboardMarkup BuildFaqListKeyboard(IEnumerable<(int Id, string Question)> items, bool isAdmin = false)
+    {
+        var rows = new List<InlineKeyboardButton[]>();
+        foreach (var (id, question) in items)
+        {
+            var label   = question.Length > 40 ? question[..40] + "…" : question;
+            var cbData  = isAdmin ? $"adm:faq:view:{id}" : $"faq:view:{id}";
+            rows.Add(new[] { InlineKeyboardButton.WithCallbackData($"❓ {label}", cbData) });
+            if (isAdmin)
+                rows.Add(new[]
+                {
+                    InlineKeyboardButton.WithCallbackData("✏️ ویرایش", $"adm:faq:edit:{id}"),
+                    InlineKeyboardButton.WithCallbackData("🗑 حذف",    $"adm:faq:del:{id}")
+                });
+        }
+        if (isAdmin)
+            rows.Add(new[] { InlineKeyboardButton.WithCallbackData("➕ افزودن سوال", "adm:faq:add") });
+        return new InlineKeyboardMarkup(rows);
+    }
+
+    public InlineKeyboardMarkup BuildRenewalDurationKeyboard() =>
+        new InlineKeyboardMarkup(new[]
+        {
+            new[]
+            {
+                InlineKeyboardButton.WithCallbackData("۱ ماه",  "renew:duration:1"),
+                InlineKeyboardButton.WithCallbackData("۳ ماه",  "renew:duration:3")
+            },
+            new[]
+            {
+                InlineKeyboardButton.WithCallbackData("۶ ماه",  "renew:duration:6"),
+                InlineKeyboardButton.WithCallbackData("۱۲ ماه", "renew:duration:12")
+            }
+        });
+
+    public InlineKeyboardMarkup BuildScheduledBroadcastFilterKeyboard() =>
+        new InlineKeyboardMarkup(new[]
+        {
+            new[]
+            {
+                InlineKeyboardButton.WithCallbackData("👥 همه کاربران",        "adm:bcast:filter:all"),
+                InlineKeyboardButton.WithCallbackData("📅 فعال ۷ روز اخیر",   "adm:bcast:filter:7d")
+            },
+            new[]
+            {
+                InlineKeyboardButton.WithCallbackData("📆 فعال ۳۰ روز اخیر",  "adm:bcast:filter:30d")
             }
         });
 }

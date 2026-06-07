@@ -18,6 +18,8 @@ public class AppDbContext : DbContext
     // ── Platform tables (no tenant filter) ────────────────────────────────────
     public DbSet<Tenant> Tenants => Set<Tenant>();
     public DbSet<SubscriptionPlan> SubscriptionPlans => Set<SubscriptionPlan>();
+    public DbSet<TenantNote> TenantNotes => Set<TenantNote>();
+    public DbSet<RenewalRequest> RenewalRequests => Set<RenewalRequest>();
 
     // ── Tenant-scoped tables ───────────────────────────────────────────────────
     public DbSet<TelegramUser> TelegramUsers => Set<TelegramUser>();
@@ -40,6 +42,10 @@ public class AppDbContext : DbContext
     public DbSet<CouponUsage> CouponUsages => Set<CouponUsage>();
     public DbSet<Affiliate> Affiliates => Set<Affiliate>();
     public DbSet<AffiliateReferral> AffiliateReferrals => Set<AffiliateReferral>();
+
+    // ── Tenant-scoped Phase 6 tables ──────────────────────────────────────────
+    public DbSet<FaqItem> FaqItems => Set<FaqItem>();
+    public DbSet<ScheduledBroadcast> ScheduledBroadcasts => Set<ScheduledBroadcast>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -75,6 +81,10 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<Affiliate>().HasQueryFilter(
             e => !_tenantContext.IsSet || e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<AffiliateReferral>().HasQueryFilter(
+            e => !_tenantContext.IsSet || e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<FaqItem>().HasQueryFilter(
+            e => !_tenantContext.IsSet || e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<ScheduledBroadcast>().HasQueryFilter(
             e => !_tenantContext.IsSet || e.TenantId == _tenantContext.TenantId);
     }
 

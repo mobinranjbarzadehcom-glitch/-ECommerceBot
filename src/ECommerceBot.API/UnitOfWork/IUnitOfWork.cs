@@ -25,6 +25,12 @@ public interface IUnitOfWork : IDisposable
     IAffiliateRepository Affiliates { get; }
     IAffiliateReferralRepository AffiliateReferrals { get; }
 
+    // Phase 6
+    ITenantNoteRepository TenantNotes { get; }
+    IRenewalRequestRepository RenewalRequests { get; }
+    IScheduledBroadcastRepository ScheduledBroadcasts { get; }
+    IFaqItemRepository FaqItems { get; }
+
     Task<int> SaveChangesAsync(CancellationToken cancellationToken = default);
     Task BeginTransactionAsync();
     Task CommitTransactionAsync();

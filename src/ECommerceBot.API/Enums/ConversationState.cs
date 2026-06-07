@@ -44,4 +44,16 @@ public enum ConversationState
 
     // Admin broadcast
     AwaitingBroadcastMessage = 80,
+    AwaitingScheduledBroadcastTime = 81,
+
+    // FAQ management
+    AwaitingFaqQuestion = 82,
+    AwaitingFaqAnswer = 83,
+    AwaitingFaqEdit = 84,
+
+    // White label branding
+    AwaitingWhiteLabelValue = 91,
+
+    // Tenant owner: subscription renewal
+    AwaitingRenewalReceipt = 92,
 }

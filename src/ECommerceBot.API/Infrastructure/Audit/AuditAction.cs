@@ -37,4 +37,21 @@ public static class AuditAction
     public const string BroadcastMessage = "BroadcastMessage";
     public const string ExportOrders = "ExportOrders";
     public const string ExportUsers = "ExportUsers";
+
+    // Phase 6
+    public const string CreateRenewalRequest = "CreateRenewalRequest";
+    public const string ApproveRenewal = "ApproveRenewal";
+    public const string RejectRenewal = "RejectRenewal";
+    public const string CreateFaqItem = "CreateFaqItem";
+    public const string EditFaqItem = "EditFaqItem";
+    public const string DeleteFaqItem = "DeleteFaqItem";
+    public const string ScheduleBroadcast = "ScheduleBroadcast";
+    public const string CancelBroadcast = "CancelBroadcast";
+    public const string UpdateWhiteLabel = "UpdateWhiteLabel";
+    public const string ManualBackup = "ManualBackup";
+    public const string SuspendTenant = "SuspendTenant";
+    public const string ActivateTenant = "ActivateTenant";
+    public const string AddTenantNote = "AddTenantNote";
+    public const string DeleteTenantNote = "DeleteTenantNote";
+    public const string RetryWebhook = "RetryWebhook";
 }

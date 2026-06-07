@@ -7,4 +7,19 @@ public enum SuperAdminState
     AwaitingBotToken = 2,
     ConfirmAddTenant = 3,
     AwaitingImpersonateTenantSlug = 4,
+
+    // Extended provisioning wizard
+    AwaitingCustomerName = 5,
+    AwaitingCustomerPhone = 6,
+    AwaitingCustomerUsername = 7,
+    AwaitingSubscriptionType = 8,
+    AwaitingPlanSelection = 9,
+    AwaitingDurationSelection = 10,
+    AwaitingTrialDuration = 11,
+
+    // Suspension
+    AwaitingSuspensionReason = 12,
+
+    // CRM notes
+    AwaitingTenantNote = 13,
 }

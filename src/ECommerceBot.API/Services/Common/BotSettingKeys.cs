@@ -32,6 +32,10 @@ public static class BotSettingKeys
     public const string AdminMenuSettingsButton = "AdminMenu.SettingsButton";
     public const string AdminMenuStatisticsButton = "AdminMenu.StatisticsButton";
     public const string AdminMenuLicenseButton = "AdminMenu.LicenseButton";
+    public const string AdminMenuFaqButton = "AdminMenu.FaqButton";
+    public const string AdminMenuBrandingButton = "AdminMenu.BrandingButton";
+    public const string AdminMenuResourceUsageButton = "AdminMenu.ResourceUsageButton";
+    public const string MainMenuFaqButton = "MainMenu.FaqButton";
 
     // Admin action buttons
     public const string AdminActionsApproveButton = "AdminActions.ApproveButton";
@@ -52,6 +56,13 @@ public static class BotSettingKeys
     public const string BrandSuccessEmoji = "Brand.SuccessEmoji";
     public const string BrandWarningEmoji = "Brand.WarningEmoji";
     public const string BrandErrorEmoji = "Brand.ErrorEmoji";
+    public const string BrandLogoFileId = "Brand.LogoFileId";
+
+    // Backup
+    public const string BackupChannelId = "Backup.ChannelId";
+
+    // Renewal
+    public const string RenewalPaymentInstruction = "Renewal.PaymentInstruction";
 
     // License messages
     public const string LicenseActivationSuccessMessage = "License.ActivationSuccessMessage";

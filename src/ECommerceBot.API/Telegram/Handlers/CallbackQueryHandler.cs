@@ -12,6 +12,7 @@ using ECommerceBot.API.Telegram.Services;
 using ECommerceBot.API.Telegram.States;
 using ECommerceBot.API.UnitOfWork;
 using Telegram.Bot.Types;
+using Telegram.Bot.Types.Enums;
 using Telegram.Bot.Types.ReplyMarkups;
 
 namespace ECommerceBot.API.Telegram.Handlers;
@@ -34,6 +35,8 @@ public class CallbackQueryHandler : ICallbackQueryHandler
     private readonly IExportService _exportService;
     private readonly ILicenseService _licenseService;
     private readonly IServerFingerprintService _fingerprintService;
+    private readonly IFaqService _faqService;
+    private readonly IBotTextService _textsMutable;
     private readonly ILogger<CallbackQueryHandler> _logger;
 
     public CallbackQueryHandler(
@@ -53,6 +56,7 @@ public class CallbackQueryHandler : ICallbackQueryHandler
         IExportService exportService,
         ILicenseService licenseService,
         IServerFingerprintService fingerprintService,
+        IFaqService faqService,
         ILogger<CallbackQueryHandler> logger)
     {
         _uow = uow;
@@ -63,6 +67,7 @@ public class CallbackQueryHandler : ICallbackQueryHandler
         _msg = msg;
         _kb = kb;
         _texts = texts;
+        _textsMutable = texts;
         _conv = conv;
         _audit = audit;
         _rateLimit = rateLimit;
@@ -71,6 +76,7 @@ public class CallbackQueryHandler : ICallbackQueryHandler
         _exportService = exportService;
         _licenseService = licenseService;
         _fingerprintService = fingerprintService;
+        _faqService = faqService;
         _logger = logger;
     }
 
@@ -138,6 +144,17 @@ public class CallbackQueryHandler : ICallbackQueryHandler
                     return;
                 }
                 await HandleLicenseCallbackAsync(parts, user, chatId, ct);
+                break;
+            case "faq":
+                await HandleFaqCallbackAsync(parts, user, chatId, ct);
+                break;
+            case "renew":
+                if (user.Role != UserRole.Admin)
+                {
+                    await _msg.SendHtmlAsync(chatId, "❌ دسترسی ندارید.", ct: ct);
+                    return;
+                }
+                await HandleRenewalCallbackAsync(parts, user, chatId, ct);
                 break;
             default:
                 _logger.LogWarning("Unknown callback action '{Action}' from {TelegramId}", action, user.TelegramId);
@@ -427,6 +444,8 @@ public class CallbackQueryHandler : ICallbackQueryHandler
             case "mgr":  await HandleAdminManagementCallbackAsync(idStr, parts, user, chatId, ct); break;
             case "cpn":    await HandleAdminCouponCallbackAsync(idStr, parts, user, chatId, ct); break;
             case "export": await HandleAdminExportCallbackAsync(idStr, user, chatId, ct); break;
+            case "faq":    await HandleAdminFaqCallbackAsync(idStr, parts, user, chatId, ct); break;
+            case "brand":  await HandleAdminBrandCallbackAsync(idStr, parts, user, chatId, ct); break;
         }
     }
 
@@ -919,6 +938,180 @@ public class CallbackQueryHandler : ICallbackQueryHandler
                 new[] { InlineKeyboardButton.WithCallbackData("⬅️ بازگشت", "adm:cpn:list") }
             });
             await _msg.SendHtmlAsync(chatId, html, kb, ct);
+        }
+    }
+
+    // ─── Phase 6: Customer FAQ callbacks ────────────────────────────────────
+
+    private async Task HandleFaqCallbackAsync(string[] parts, TelegramUser user, long chatId, CancellationToken ct)
+    {
+        var lang = user.PreferredLanguage;
+        var sub = parts.ElementAtOrDefault(1);
+
+        if (sub == "view" && int.TryParse(parts.ElementAtOrDefault(2), out var faqId))
+        {
+            var item = await _faqService.GetByIdAsync(faqId);
+            if (item is null)
+            {
+                await _msg.SendHtmlAsync(chatId,
+                    await _texts.GetAsync("Faq.NotFound", lang, "❌ سوال یافت نشد."), ct: ct);
+                return;
+            }
+
+            await _msg.SendHtmlAsync(chatId,
+                $"❓ <b>{HtmlSanitizer.Encode(item.Question)}</b>\n\n" +
+                $"💬 {HtmlSanitizer.Encode(item.Answer)}", ct: ct);
+        }
+    }
+
+    // ─── Phase 6: Admin FAQ callbacks ────────────────────────────────────────
+
+    private async Task HandleAdminFaqCallbackAsync(string? idStr, string[] parts, TelegramUser user, long chatId, CancellationToken ct)
+    {
+        var lang = user.PreferredLanguage;
+        if (!_tenantContext.IsSet) return;
+
+        // adm:faq:add — start question wizard
+        if (idStr == "add")
+        {
+            await _conv.SetStateAsync(user, ConversationState.AwaitingFaqQuestion, ct);
+            await _msg.SendHtmlAsync(chatId,
+                "❓ <b>افزودن سوال جدید</b>\n\n📝 متن سوال را وارد کنید:",
+                await _kb.BuildCancelKeyboardAsync(lang), ct);
+            return;
+        }
+
+        // adm:faq:view:{id}
+        if (idStr == "view" && int.TryParse(parts.ElementAtOrDefault(3), out var viewId))
+        {
+            var item = await _faqService.GetByIdAsync(viewId);
+            if (item is null) return;
+            await _msg.SendHtmlAsync(chatId,
+                $"❓ <b>{HtmlSanitizer.Encode(item.Question)}</b>\n\n💬 {HtmlSanitizer.Encode(item.Answer)}\n\n" +
+                $"📊 نمایش: {(item.IsActive ? "✅ فعال" : "❌ غیرفعال")}", ct: ct);
+            return;
+        }
+
+        // adm:faq:edit:{id}
+        if (idStr == "edit" && int.TryParse(parts.ElementAtOrDefault(3), out var editId))
+        {
+            await _conv.SetAdminContextAsync(user, new AdminContext { TargetSettingKey = editId.ToString() }, ct);
+            await _conv.SetStateAsync(user, ConversationState.AwaitingFaqEdit, ct);
+            await _msg.SendHtmlAsync(chatId,
+                "✏️ <b>ویرایش پاسخ</b>\n\nپاسخ جدید را وارد کنید:",
+                await _kb.BuildCancelKeyboardAsync(lang), ct);
+            return;
+        }
+
+        // adm:faq:del:{id}
+        if (idStr == "del" && int.TryParse(parts.ElementAtOrDefault(3), out var delId))
+        {
+            var result = await _faqService.DeleteAsync(delId);
+            if (result.IsSuccess)
+            {
+                await _audit.LogAsync(user.Id, AuditAction.DeleteFaqItem, "FaqItem", delId, "Deleted");
+                await _msg.SendHtmlAsync(chatId, "✅ سوال حذف شد.", ct: ct);
+            }
+            else
+                await _msg.SendHtmlAsync(chatId, $"❌ {result.ErrorMessage}", ct: ct);
+            return;
+        }
+
+        // adm:faq:toggle:{id}
+        if (idStr == "toggle" && int.TryParse(parts.ElementAtOrDefault(3), out var toggleId))
+        {
+            var result = await _faqService.ToggleActiveAsync(toggleId);
+            await _msg.SendHtmlAsync(chatId, result.IsSuccess ? "✅ وضعیت تغییر کرد." : $"❌ {result.ErrorMessage}", ct: ct);
+        }
+    }
+
+    // ─── Phase 6: Admin Branding callbacks ───────────────────────────────────
+
+    private async Task HandleAdminBrandCallbackAsync(string? idStr, string[] parts, TelegramUser user, long chatId, CancellationToken ct)
+    {
+        var lang = user.PreferredLanguage;
+
+        string? settingKey = idStr switch
+        {
+            "logo"      => "BrandLogoFileId",
+            "welcome"   => "WelcomeMessage",
+            "storename" => "StoreName",
+            _           => null
+        };
+
+        if (settingKey is null)
+        {
+            await _msg.SendHtmlAsync(chatId, "❌ عملیات نامعتبر.", ct: ct);
+            return;
+        }
+
+        string prompt = idStr switch
+        {
+            "logo"      => "🖼 تصویر لوگوی جدید را ارسال کنید:",
+            "welcome"   => "👋 متن پیام خوش‌آمد جدید را وارد کنید:",
+            "storename" => "🏷 نام فروشگاه جدید را وارد کنید:",
+            _           => "مقدار جدید را وارد کنید:"
+        };
+
+        await _conv.SetAdminContextAsync(user, new AdminContext { TargetSettingKey = settingKey }, ct);
+        await _conv.SetStateAsync(user, ConversationState.AwaitingWhiteLabelValue, ct);
+        await _msg.SendHtmlAsync(chatId, prompt, await _kb.BuildCancelKeyboardAsync(lang), ct);
+    }
+
+    // ─── Phase 6: Renewal callbacks ──────────────────────────────────────────
+
+    private async Task HandleRenewalCallbackAsync(string[] parts, TelegramUser user, long chatId, CancellationToken ct)
+    {
+        var lang = user.PreferredLanguage;
+        var sub = parts.ElementAtOrDefault(1);
+
+        // renew:start — choose duration
+        if (sub == "start")
+        {
+            await _msg.SendHtmlAsync(chatId,
+                "🔄 <b>تجدید اشتراک</b>\n\nمدت تجدید را انتخاب کنید:",
+                _kb.BuildRenewalDurationKeyboard(), ct);
+            return;
+        }
+
+        // renew:duration:{months} — duration chosen, ask for receipt
+        if (sub == "duration" && int.TryParse(parts.ElementAtOrDefault(2), out var months))
+        {
+            await _conv.SetAdminContextAsync(user, new AdminContext { PendingAction = $"renewal:{months}" }, ct);
+            await _conv.SetStateAsync(user, ConversationState.AwaitingRenewalReceipt, ct);
+            await _msg.SendHtmlAsync(chatId,
+                $"📅 مدت انتخابی: <b>{months} ماه</b>\n\n" +
+                "📸 رسید پرداخت را ارسال کنید (یا «⏭️ رد شدن» برای ارسال بدون رسید):",
+                await _kb.BuildSkipCancelKeyboardAsync(lang), ct);
+            return;
+        }
+
+        // renew:upgrade — ask which plan (list plans)
+        if (sub == "upgrade")
+        {
+            var plans = (await _uow.SubscriptionPlans.GetActivePlansAsync()).ToList();
+            if (plans.Count == 0)
+            {
+                await _msg.SendHtmlAsync(chatId, "❌ هیچ پلنی موجود نیست.", ct: ct);
+                return;
+            }
+
+            var rows = plans.Select(p =>
+                new[] { InlineKeyboardButton.WithCallbackData($"📦 {p.Name}", $"renew:plan:{p.Id}") }
+            ).ToList();
+            await _msg.SendHtmlAsync(chatId, "⬆️ <b>ارتقای پلن</b>\n\nپلن مورد نظر را انتخاب کنید:",
+                new InlineKeyboardMarkup(rows), ct);
+            return;
+        }
+
+        // renew:plan:{planId} — plan chosen for upgrade
+        if (sub == "plan" && int.TryParse(parts.ElementAtOrDefault(2), out var planId))
+        {
+            await _conv.SetAdminContextAsync(user, new AdminContext { PendingAction = $"upgrade:{planId}" }, ct);
+            await _conv.SetStateAsync(user, ConversationState.AwaitingRenewalReceipt, ct);
+            await _msg.SendHtmlAsync(chatId,
+                "📸 رسید پرداخت را ارسال کنید (یا «⏭️ رد شدن»):",
+                await _kb.BuildSkipCancelKeyboardAsync(lang), ct);
         }
     }
 }

@@ -33,5 +33,13 @@ public class Tenant : BaseEntity
     // Tracks which expiry reminders have already been sent (e.g. "7,3,1").
     public string? ExpiryRemindersSent { get; set; }
 
+    // Trial support
+    public bool IsTrial { get; set; } = false;
+
+    // Suspension tracking
+    public string? SuspendedReason { get; set; }
+    public DateTime? SuspendedAt { get; set; }
+
     public SubscriptionPlan? Plan { get; set; }
+    public ICollection<TenantNote> Notes { get; set; } = new List<TenantNote>();
 }

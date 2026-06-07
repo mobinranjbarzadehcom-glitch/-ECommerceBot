@@ -7,13 +7,18 @@ using ECommerceBot.API.Infrastructure.Licensing;
 using ECommerceBot.API.Infrastructure.Multitenancy;
 using ECommerceBot.API.Infrastructure.RateLimit;
 using ECommerceBot.API.Infrastructure.Security;
+using ECommerceBot.API.Services.Common;
 using ECommerceBot.API.Services.Interfaces;
 using ECommerceBot.API.Telegram.Keyboards;
 using ECommerceBot.API.Telegram.Messages;
+using ECommerceBot.API.Telegram.Options;
 using ECommerceBot.API.Telegram.Services;
 using ECommerceBot.API.Telegram.States;
 using ECommerceBot.API.UnitOfWork;
+using Microsoft.Extensions.Options;
+using Telegram.Bot;
 using Telegram.Bot.Types;
+using Telegram.Bot.Types.Enums;
 using Telegram.Bot.Types.ReplyMarkups;
 
 namespace ECommerceBot.API.Telegram.Handlers;
@@ -41,6 +46,11 @@ public class MessageHandler : IMessageHandler
     private readonly IAiSupportService _aiSupportService;
     private readonly ILicenseService _licenseService;
     private readonly IServerFingerprintService _fingerprintService;
+    private readonly IRenewalService _renewalService;
+    private readonly IResourceUsageService _resourceUsageService;
+    private readonly IFaqService _faqService;
+    private readonly ITelegramBotClient _platformBot;
+    private readonly TelegramOptions _telegramOptions;
     private readonly ILogger<MessageHandler> _logger;
 
     public MessageHandler(
@@ -65,6 +75,11 @@ public class MessageHandler : IMessageHandler
         IAiSupportService aiSupportService,
         ILicenseService licenseService,
         IServerFingerprintService fingerprintService,
+        IRenewalService renewalService,
+        IResourceUsageService resourceUsageService,
+        IFaqService faqService,
+        ITelegramBotClient platformBot,
+        IOptions<TelegramOptions> telegramOptions,
         ILogger<MessageHandler> logger)
     {
         _uow = uow;
@@ -88,6 +103,11 @@ public class MessageHandler : IMessageHandler
         _aiSupportService = aiSupportService;
         _licenseService = licenseService;
         _fingerprintService = fingerprintService;
+        _renewalService = renewalService;
+        _resourceUsageService = resourceUsageService;
+        _faqService = faqService;
+        _platformBot = platformBot;
+        _telegramOptions = telegramOptions.Value;
         _logger = logger;
     }
 
@@ -228,12 +248,14 @@ public class MessageHandler : IMessageHandler
         var orders   = await _texts.GetAsync("MainMenu.OrdersButton",   lang, "📦 Orders");
         var support  = await _texts.GetAsync("MainMenu.SupportButton",  lang, "🎫 Support");
         var help     = await _texts.GetAsync("MainMenu.HelpButton",     lang, "❓ Help");
+        var faqBtn   = await _texts.GetAsync("MainMenu.FaqButton",      lang, "💬 سوالات متداول");
 
         if (text == products) { await ShowProductCategoriesAsync(user, ct); return; }
         if (text == wallet)   { await ShowWalletAsync(user, ct); return; }
         if (text == orders)   { await ShowOrdersAsync(user, ct); return; }
         if (text == support)  { await ShowSupportAsync(user, ct); return; }
         if (text == help)     { await ShowHelpAsync(user, ct); return; }
+        if (text == faqBtn)   { await ShowCustomerFaqAsync(user, ct); return; }
 
         if (user.Role == UserRole.Admin)
         {
@@ -420,6 +442,21 @@ public class MessageHandler : IMessageHandler
                 break;
             case ConversationState.AwaitingBroadcastMessage:
                 await HandleBroadcastMessageAsync(message, user, ct);
+                break;
+            case ConversationState.AwaitingFaqQuestion:
+                await HandleAdminFaqQuestionAsync(message, user, ct);
+                break;
+            case ConversationState.AwaitingFaqAnswer:
+                await HandleAdminFaqAnswerAsync(message, user, ct);
+                break;
+            case ConversationState.AwaitingFaqEdit:
+                await HandleAdminFaqEditAsync(message, user, ct);
+                break;
+            case ConversationState.AwaitingWhiteLabelValue:
+                await HandleWhiteLabelValueAsync(message, user, ct);
+                break;
+            case ConversationState.AwaitingRenewalReceipt:
+                await HandleRenewalReceiptAsync(message, user, ct);
                 break;
             default:
                 await _conv.ClearStateAsync(user, ct);
@@ -615,8 +652,11 @@ public class MessageHandler : IMessageHandler
         var userView      = await _texts.GetAsync("AdminMenu.UserViewButton",   lang, "👁 مشاهده مثل کاربر");
         var license       = await _texts.GetAsync("AdminMenu.LicenseButton",    lang, "🔐 وضعیت لایسنس");
         var coupons       = await _texts.GetAsync("AdminMenu.CouponsButton",    lang, "🎟 کوپن‌ها");
-        var broadcast     = await _texts.GetAsync("AdminMenu.BroadcastButton",  lang, "📢 پیام همگانی");
-        var export        = await _texts.GetAsync("AdminMenu.ExportButton",     lang, "📤 خروجی CSV");
+        var broadcast     = await _texts.GetAsync("AdminMenu.BroadcastButton",      lang, "📢 پیام همگانی");
+        var export        = await _texts.GetAsync("AdminMenu.ExportButton",         lang, "📤 خروجی CSV");
+        var faqAdmin      = await _texts.GetAsync("AdminMenu.FaqButton",            lang, "❓ سوالات متداول");
+        var branding      = await _texts.GetAsync("AdminMenu.BrandingButton",       lang, "🏷 برندینگ");
+        var usage         = await _texts.GetAsync("AdminMenu.ResourceUsageButton",  lang, "📊 مصرف اشتراک");
 
         if (text == pendingOrders) { await ShowAdminPendingOrdersAsync(user, ct); return; }
         if (text == users)         { await ShowAdminUsersAsync(user, ct); return; }
@@ -631,6 +671,9 @@ public class MessageHandler : IMessageHandler
         if (text == coupons)       { await ShowAdminCouponsAsync(user, ct); return; }
         if (text == broadcast)     { await StartBroadcastAsync(user, ct); return; }
         if (text == export)        { await ShowExportMenuAsync(user, ct); return; }
+        if (text == faqAdmin)      { await ShowAdminFaqAsync(user, ct); return; }
+        if (text == branding)      { await ShowBrandingMenuAsync(user, ct); return; }
+        if (text == usage)         { await ShowResourceUsageAsync(user, ct); return; }
 
         await _msg.SendHtmlAsync(user.ChatId,
             await _texts.GetAsync("Admin.UseMenu", lang, "لطفاً از دکمه‌های منو استفاده کنید."),
@@ -1628,5 +1671,340 @@ public class MessageHandler : IMessageHandler
             var text = await _texts.FormatAsync(messageKey, orderUser.PreferredLanguage, vars);
             await _msg.SendHtmlAsync(orderUser.ChatId, text, ct: ct);
         }
+    }
+
+    // ─── Phase 6: FAQ (Customer) ─────────────────────────────────────────────
+
+    private async Task ShowCustomerFaqAsync(TelegramUser user, CancellationToken ct)
+    {
+        var lang = user.PreferredLanguage;
+        if (!_tenantContext.IsSet) return;
+
+        var items = (await _faqService.GetActiveAsync(_tenantContext.TenantId)).ToList();
+        if (items.Count == 0)
+        {
+            await _msg.SendHtmlAsync(user.ChatId,
+                await _texts.GetAsync("Faq.Empty", lang, "❓ در حال حاضر سوالی ثبت نشده است."), ct: ct);
+            return;
+        }
+
+        var kb = _kb.BuildFaqListKeyboard(items.Select(f => (f.Id, f.Question)), isAdmin: false);
+        await _msg.SendHtmlAsync(user.ChatId,
+            await _texts.GetAsync("Faq.CustomerTitle", lang, "💬 <b>سوالات متداول</b>\n\nروی هر سوال کلیک کنید:"),
+            kb, ct);
+    }
+
+    // ─── Phase 6: FAQ (Admin) ────────────────────────────────────────────────
+
+    private async Task ShowAdminFaqAsync(TelegramUser user, CancellationToken ct)
+    {
+        if (!_tenantContext.IsSet) return;
+
+        var items = (await _faqService.GetAllAsync(_tenantContext.TenantId)).ToList();
+
+        var kb = _kb.BuildFaqListKeyboard(items.Select(f => (f.Id, f.Question)), isAdmin: true);
+        var header = items.Count == 0
+            ? "❓ <b>سوالات متداول</b>\n\nهنوز سوالی اضافه نشده است."
+            : $"❓ <b>سوالات متداول</b> ({items.Count} مورد)";
+
+        await _msg.SendHtmlAsync(user.ChatId, header, kb, ct);
+    }
+
+    private async Task HandleAdminFaqQuestionAsync(Message message, TelegramUser user, CancellationToken ct)
+    {
+        var lang = user.PreferredLanguage;
+        var question = message.Text?.Trim();
+        if (string.IsNullOrWhiteSpace(question))
+        {
+            await _msg.SendHtmlAsync(user.ChatId,
+                "❌ سوال نمی‌تواند خالی باشد. دوباره وارد کنید:", ct: ct);
+            return;
+        }
+
+        var ctx = await _conv.GetAdminContextAsync(user) ?? new AdminContext();
+        ctx.PendingAction = question;
+        await _conv.SetAdminContextAsync(user, ctx, ct);
+        await _conv.SetStateAsync(user, ConversationState.AwaitingFaqAnswer, ct);
+
+        await _msg.SendHtmlAsync(user.ChatId,
+            $"✅ سوال ثبت شد.\n\n📝 حالا پاسخ سوال را وارد کنید:",
+            await _kb.BuildCancelKeyboardAsync(lang), ct);
+    }
+
+    private async Task HandleAdminFaqAnswerAsync(Message message, TelegramUser user, CancellationToken ct)
+    {
+        var lang = user.PreferredLanguage;
+        var answer = message.Text?.Trim();
+        if (string.IsNullOrWhiteSpace(answer))
+        {
+            await _msg.SendHtmlAsync(user.ChatId, "❌ پاسخ نمی‌تواند خالی باشد.", ct: ct);
+            return;
+        }
+
+        var ctx = await _conv.GetAdminContextAsync(user);
+        var question = ctx?.PendingAction;
+        await _conv.ClearStateAsync(user, ct);
+
+        if (string.IsNullOrWhiteSpace(question))
+        {
+            await _msg.SendHtmlAsync(user.ChatId, "❌ نشست منقضی شد.", await _kb.BuildAdminMenuAsync(lang), ct);
+            return;
+        }
+
+        var result = await _faqService.CreateAsync(_tenantContext.TenantId, question, answer);
+        if (result.IsSuccess)
+        {
+            await _audit.LogAsync(user.Id, AuditAction.CreateFaqItem, "FaqItem", result.Data!.Id, question);
+            await _msg.SendHtmlAsync(user.ChatId,
+                $"✅ <b>سوال جدید اضافه شد!</b>\n\n❓ {HtmlSanitizer.Encode(question)}\n💬 {HtmlSanitizer.Encode(answer)}",
+                await _kb.BuildAdminMenuAsync(lang), ct);
+        }
+        else
+            await _msg.SendHtmlAsync(user.ChatId, $"❌ {result.ErrorMessage}", await _kb.BuildAdminMenuAsync(lang), ct);
+    }
+
+    private async Task HandleAdminFaqEditAsync(Message message, TelegramUser user, CancellationToken ct)
+    {
+        var lang = user.PreferredLanguage;
+        var newAnswer = message.Text?.Trim();
+        if (string.IsNullOrWhiteSpace(newAnswer))
+        {
+            await _msg.SendHtmlAsync(user.ChatId, "❌ پاسخ نمی‌تواند خالی باشد.", ct: ct);
+            return;
+        }
+
+        var ctx = await _conv.GetAdminContextAsync(user);
+        await _conv.ClearStateAsync(user, ct);
+
+        if (ctx?.TargetSettingKey is null || !int.TryParse(ctx.TargetSettingKey, out var faqId))
+        {
+            await _msg.SendHtmlAsync(user.ChatId, "❌ نشست منقضی شد.", await _kb.BuildAdminMenuAsync(lang), ct);
+            return;
+        }
+
+        var existing = await _faqService.GetByIdAsync(faqId);
+        var result = await _faqService.UpdateAsync(faqId, existing?.Question ?? string.Empty, newAnswer);
+        if (result.IsSuccess)
+        {
+            await _audit.LogAsync(user.Id, AuditAction.EditFaqItem, "FaqItem", faqId, "Answer updated");
+            await _msg.SendHtmlAsync(user.ChatId,
+                "✅ پاسخ سوال به‌روزرسانی شد.", await _kb.BuildAdminMenuAsync(lang), ct);
+        }
+        else
+            await _msg.SendHtmlAsync(user.ChatId, $"❌ {result.ErrorMessage}", await _kb.BuildAdminMenuAsync(lang), ct);
+    }
+
+    // ─── Phase 6: White Label Branding ───────────────────────────────────────
+
+    private async Task ShowBrandingMenuAsync(TelegramUser user, CancellationToken ct)
+    {
+        if (!_tenantContext.IsSet) return;
+
+        var tenant = await _uow.Tenants.GetByIdAsync(_tenantContext.TenantId);
+        if (tenant?.Plan?.AllowsWhiteLabel != true)
+        {
+            await _msg.SendHtmlAsync(user.ChatId,
+                "❌ <b>برندینگ اختصاصی</b>\n\nاین قابلیت در پلن فعلی شما فعال نیست.\nبرای ارتقای پلن با پشتیبانی تماس بگیرید.",
+                ct: ct);
+            return;
+        }
+
+        var logoFileId   = await _texts.GetAsync("BrandLogoFileId",    "fa", "");
+        var welcomeText  = await _texts.GetAsync("WelcomeMessage",     "fa", "");
+
+        var rows = new List<InlineKeyboardButton[]>
+        {
+            new[] { InlineKeyboardButton.WithCallbackData("🖼 تغییر لوگو",        "adm:brand:logo") },
+            new[] { InlineKeyboardButton.WithCallbackData("👋 تغییر پیام خوش‌آمد", "adm:brand:welcome") },
+            new[] { InlineKeyboardButton.WithCallbackData("🏷 تغییر نام فروشگاه", "adm:brand:storename") },
+        };
+
+        await _msg.SendHtmlAsync(user.ChatId,
+            "🏷 <b>برندینگ اختصاصی</b>\n\nتنظیمات ظاهر ربات خود را شخصی‌سازی کنید:",
+            new InlineKeyboardMarkup(rows), ct);
+    }
+
+    private async Task HandleWhiteLabelValueAsync(Message message, TelegramUser user, CancellationToken ct)
+    {
+        var lang = user.PreferredLanguage;
+        var ctx = await _conv.GetAdminContextAsync(user);
+        var key = ctx?.TargetSettingKey;
+        await _conv.ClearStateAsync(user, ct);
+
+        if (string.IsNullOrEmpty(key))
+        {
+            await _msg.SendHtmlAsync(user.ChatId, "❌ نشست منقضی شد.", await _kb.BuildAdminMenuAsync(lang), ct);
+            return;
+        }
+
+        string? value = null;
+
+        if (key == "BrandLogoFileId")
+        {
+            if (message.Photo is null)
+            {
+                await _msg.SendHtmlAsync(user.ChatId, "❌ لطفاً یک تصویر ارسال کنید.", await _kb.BuildAdminMenuAsync(lang), ct);
+                return;
+            }
+            value = message.Photo[^1].FileId;
+        }
+        else
+        {
+            value = message.Text?.Trim();
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                await _msg.SendHtmlAsync(user.ChatId, "❌ مقدار نمی‌تواند خالی باشد.", await _kb.BuildAdminMenuAsync(lang), ct);
+                return;
+            }
+        }
+
+        await _texts.SetAsync(key, value);
+        await _audit.LogAsync(user.Id, AuditAction.UpdateWhiteLabel, "BotSetting", null, $"Key={key}");
+        await _msg.SendHtmlAsync(user.ChatId,
+            $"✅ تنظیم برندینگ به‌روز شد.",
+            await _kb.BuildAdminMenuAsync(lang), ct);
+    }
+
+    // ─── Phase 6: Resource Usage Dashboard ───────────────────────────────────
+
+    private async Task ShowResourceUsageAsync(TelegramUser user, CancellationToken ct)
+    {
+        if (!_tenantContext.IsSet)
+        {
+            await _msg.SendHtmlAsync(user.ChatId, "❌ اطلاعات در دسترس نیست.", ct: ct);
+            return;
+        }
+
+        var snapshot = await _resourceUsageService.GetSnapshotAsync(_tenantContext.TenantId);
+        if (snapshot is null)
+        {
+            await _msg.SendHtmlAsync(user.ChatId, "❌ اطلاعات در دسترس نیست.", ct: ct);
+            return;
+        }
+
+        string UsageBar(int used, int max) =>
+            max <= 0 ? $"{used} / ∞" : $"{used} / {max}";
+
+        var html = $"📊 <b>مصرف اشتراک</b>\n\n" +
+                   $"📦 پلن: <b>{HtmlSanitizer.Encode(snapshot.PlanName)}</b>\n" +
+                   $"👥 کاربران: <b>{UsageBar(snapshot.UserCount, snapshot.MaxUsers)}</b>\n" +
+                   $"📦 محصولات: <b>{UsageBar(snapshot.ProductCount, snapshot.MaxProducts)}</b>\n" +
+                   $"👑 ادمین‌ها: <b>{UsageBar(snapshot.AdminCount, snapshot.MaxAdmins)}</b>\n" +
+                   $"📋 سفارش‌های این ماه: <b>{snapshot.OrdersThisMonth}</b>\n\n" +
+                   $"📅 تاریخ بررسی: {DateTime.UtcNow:yyyy-MM-dd HH:mm} UTC";
+
+        if (snapshot.ExpiresAt.HasValue)
+        {
+            var daysLeft = (int)(snapshot.ExpiresAt.Value - DateTime.UtcNow).TotalDays;
+            html += $"\n⏰ روزهای باقی‌مانده: <b>{Math.Max(0, daysLeft)}</b>";
+        }
+
+        await _msg.SendHtmlAsync(user.ChatId, html, ct: ct);
+    }
+
+    // ─── Phase 6: License/Renewal Center ─────────────────────────────────────
+
+    private async Task ShowLicenseCenterAsync(TelegramUser user, CancellationToken ct)
+    {
+        var lang = user.PreferredLanguage;
+        if (!_tenantContext.IsSet)
+        {
+            await _msg.SendHtmlAsync(user.ChatId, "❌ اطلاعات لایسنس در دسترس نیست.", ct: ct);
+            return;
+        }
+
+        var tenant = await _uow.Tenants.GetByIdAsync(_tenantContext.TenantId);
+        if (tenant is null) return;
+
+        var daysLeft = tenant.ExpiresAt.HasValue
+            ? Math.Max(0, (int)(tenant.ExpiresAt.Value - DateTime.UtcNow).TotalDays)
+            : -1;
+
+        var paymentInstruction = await _texts.GetAsync("RenewalPaymentInstruction", lang,
+            "برای تجدید اشتراک، مبلغ را به کارت اعلام‌شده واریز کرده و رسید را ارسال کنید.");
+
+        var html = $"🔐 <b>مرکز لایسنس</b>\n\n" +
+                   $"📦 پلن: <b>{HtmlSanitizer.Encode(tenant.Plan?.Name ?? "—")}</b>\n" +
+                   (tenant.ExpiresAt.HasValue
+                       ? $"📅 انقضا: <b>{tenant.ExpiresAt.Value:yyyy-MM-dd}</b> ({daysLeft} روز)\n"
+                       : "📅 انقضا: <b>ندارد</b>\n") +
+                   (tenant.IsTrial ? "⚠️ <b>اشتراک آزمایشی</b>\n" : "") +
+                   $"\n{paymentInstruction}";
+
+        var rows = new List<InlineKeyboardButton[]>
+        {
+            new[] { InlineKeyboardButton.WithCallbackData("🔄 تجدید اشتراک", "renew:start") },
+        };
+        if (tenant.Plan is not null)
+            rows.Add(new[] { InlineKeyboardButton.WithCallbackData("⬆️ ارتقای پلن", "renew:upgrade") });
+
+        await _msg.SendHtmlAsync(user.ChatId, html, new InlineKeyboardMarkup(rows), ct);
+    }
+
+    private async Task HandleRenewalReceiptAsync(Message message, TelegramUser user, CancellationToken ct)
+    {
+        var lang = user.PreferredLanguage;
+        if (!_tenantContext.IsSet)
+        {
+            await _conv.ClearStateAsync(user, ct);
+            return;
+        }
+
+        var ctx = await _conv.GetAdminContextAsync(user);
+        await _conv.ClearStateAsync(user, ct);
+
+        // ctx.PendingAction stores "renewal:{durationMonths}" or "upgrade:{planId}"
+        var parts = ctx?.PendingAction?.Split(':') ?? Array.Empty<string>();
+        if (parts.Length < 2)
+        {
+            await _msg.SendHtmlAsync(user.ChatId, "❌ نشست منقضی شد.", await _kb.BuildAdminMenuAsync(lang), ct);
+            return;
+        }
+
+        string? receiptFileId = null;
+        if (message.Photo is not null)
+            receiptFileId = message.Photo[^1].FileId;
+        else if (message.Text?.Trim() == "⏭️ رد شدن")
+            receiptFileId = null;
+        else
+        {
+            await _msg.SendHtmlAsync(user.ChatId,
+                "❌ لطفاً رسید پرداخت را به صورت عکس ارسال کنید یا «⏭️ رد شدن» را بزنید.", ct: ct);
+            await _conv.SetStateAsync(user, ConversationState.AwaitingRenewalReceipt, ct);
+            return;
+        }
+
+        var isUpgrade = parts[0] == "upgrade";
+        var durationOrPlanId = int.TryParse(parts[1], out var n) ? n : 1;
+
+        ServiceResult<RenewalRequest> result;
+        if (isUpgrade)
+            result = await _renewalService.CreateUpgradeRequestAsync(
+                _tenantContext.TenantId, user.TelegramId, durationOrPlanId);
+        else
+            result = await _renewalService.CreateRenewalRequestAsync(
+                _tenantContext.TenantId, user.TelegramId, durationOrPlanId, receiptFileId);
+
+        if (result.IsSuccess)
+        {
+            await _msg.SendHtmlAsync(user.ChatId,
+                "✅ <b>درخواست شما ثبت شد!</b>\n\nتیم پشتیبانی در اسرع وقت بررسی خواهد کرد.",
+                await _kb.BuildAdminMenuAsync(lang), ct);
+
+            // Notify SuperAdmins via platform bot
+            var requestLabel = isUpgrade ? "ارتقای پلن" : "تجدید اشتراک";
+            var notifText = $"🔔 <b>درخواست {requestLabel}</b>\n\n" +
+                            $"🏪 فروشگاه: {HtmlSanitizer.Encode(user.FirstName)} (TenantId={_tenantContext.TenantId})\n" +
+                            $"📅 مدت: {durationOrPlanId} ماه\n" +
+                            (receiptFileId is not null ? "📷 رسید ضمیمه شده" : "📷 رسید ضمیمه نشده");
+
+            foreach (var saId in _telegramOptions.SuperAdminChatIds)
+            {
+                try { await _platformBot.SendMessage(saId, notifText, parseMode: ParseMode.Html); }
+                catch { /* ignore */ }
+            }
+        }
+        else
+            await _msg.SendHtmlAsync(user.ChatId, $"❌ {result.ErrorMessage}", await _kb.BuildAdminMenuAsync(lang), ct);
     }
 }

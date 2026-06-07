@@ -20,4 +20,7 @@ public interface IKeyboardBuilder
     InlineKeyboardMarkup BuildCouponDiscountTypeKeyboard();
     Task<ReplyKeyboardMarkup> BuildCouponOrSkipKeyboardAsync(string lang = "fa");
     InlineKeyboardMarkup BuildExportKeyboard();
+    InlineKeyboardMarkup BuildFaqListKeyboard(IEnumerable<(int Id, string Question)> items, bool isAdmin = false);
+    InlineKeyboardMarkup BuildRenewalDurationKeyboard();
+    InlineKeyboardMarkup BuildScheduledBroadcastFilterKeyboard();
 }

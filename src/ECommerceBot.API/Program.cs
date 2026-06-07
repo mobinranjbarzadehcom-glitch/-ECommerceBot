@@ -135,6 +135,11 @@ try
     builder.Services.AddScoped<ICouponUsageRepository, CouponUsageRepository>();
     builder.Services.AddScoped<IAffiliateRepository, AffiliateRepository>();
     builder.Services.AddScoped<IAffiliateReferralRepository, AffiliateReferralRepository>();
+    // Phase 6 repositories
+    builder.Services.AddScoped<ITenantNoteRepository, TenantNoteRepository>();
+    builder.Services.AddScoped<IRenewalRequestRepository, RenewalRequestRepository>();
+    builder.Services.AddScoped<IScheduledBroadcastRepository, ScheduledBroadcastRepository>();
+    builder.Services.AddScoped<IFaqItemRepository, FaqItemRepository>();
 
     // ── UnitOfWork ────────────────────────────────────────────────────────────
     builder.Services.AddScoped<IUnitOfWork, ECommerceBot.API.UnitOfWork.UnitOfWork>();
@@ -151,6 +156,11 @@ try
     builder.Services.AddScoped<IOrderService, OrderService>();
     builder.Services.AddScoped<ITicketService, TicketService>();
     builder.Services.AddScoped<IAdminService, AdminService>();
+    // Phase 6 services
+    builder.Services.AddScoped<IRenewalService, RenewalService>();
+    builder.Services.AddScoped<IResourceUsageService, ResourceUsageService>();
+    builder.Services.AddScoped<IFaqService, FaqService>();
+    builder.Services.AddScoped<IBackupManagementService, BackupManagementService>();
 
     // ── Infrastructure Services ────────────────────────────────────────────────
     builder.Services.AddScoped<IAuditLogService, AuditLogService>();
@@ -170,6 +180,11 @@ try
     builder.Services.AddHostedService<DatabaseBackupService>();
     builder.Services.AddHostedService<LicenseValidationBackgroundService>();
     builder.Services.AddHostedService<TenantExpiryNotificationService>();
+    // Phase 6 background services
+    builder.Services.AddSingleton<BotHealthBackgroundService>();
+    builder.Services.AddSingleton<IBotHealthService>(sp => sp.GetRequiredService<BotHealthBackgroundService>());
+    builder.Services.AddHostedService(sp => sp.GetRequiredService<BotHealthBackgroundService>());
+    builder.Services.AddHostedService<BroadcastSchedulerService>();
 
     // ── Telegram Bot Client (singleton) ──────────────────────────────────────
     builder.Services.AddSingleton<ITelegramBotClient>(provider =>

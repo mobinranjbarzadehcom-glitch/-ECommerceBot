@@ -1,8 +1,10 @@
+using System.IO;
 using System.Text;
 using System.Text.RegularExpressions;
 using ECommerceBot.API.Entities;
 using ECommerceBot.API.Enums;
 using ECommerceBot.API.Infrastructure.Security;
+using ECommerceBot.API.Services.Interfaces;
 using ECommerceBot.API.Telegram.Options;
 using ECommerceBot.API.Telegram.States;
 using ECommerceBot.API.UnitOfWork;
@@ -22,15 +24,22 @@ public class SuperAdminHandler : ISuperAdminHandler
     private readonly IAesEncryptionService _aes;
     private readonly IMemoryCache _cache;
     private readonly TelegramOptions _opts;
+    private readonly IRenewalService _renewalService;
+    private readonly IBackupManagementService _backupService;
+    private readonly IBotHealthService _botHealth;
     private readonly ILogger<SuperAdminHandler> _logger;
 
-    // ── Hardcoded Persian menu labels ─────────────────────────────────────────
+    // ── Menu labels ───────────────────────────────────────────────────────────
     private const string BtnDashboard   = "🌐 داشبورد کل";
     private const string BtnTenants     = "👥 مشتریان";
     private const string BtnAddTenant   = "➕ افزودن مشتری";
     private const string BtnPlans       = "📋 پلن‌ها";
     private const string BtnImpersonate = "🔑 ورود به پنل مشتری";
+    private const string BtnHealth      = "📡 سلامت سیستم";
+    private const string BtnBackup      = "💾 پشتیبان گیری";
+    private const string BtnRenewals    = "🔄 درخواست‌های تمدید";
     private const string BtnCancel      = "❌ لغو";
+    private const string BtnSkip        = "⬅️ رد شدن";
 
     public SuperAdminHandler(
         IUnitOfWork uow,
@@ -38,6 +47,9 @@ public class SuperAdminHandler : ISuperAdminHandler
         IAesEncryptionService aes,
         IMemoryCache cache,
         IOptions<TelegramOptions> opts,
+        IRenewalService renewalService,
+        IBackupManagementService backupService,
+        IBotHealthService botHealth,
         ILogger<SuperAdminHandler> logger)
     {
         _uow = uow;
@@ -45,6 +57,9 @@ public class SuperAdminHandler : ISuperAdminHandler
         _aes = aes;
         _cache = cache;
         _opts = opts.Value;
+        _renewalService = renewalService;
+        _backupService = backupService;
+        _botHealth = botHealth;
         _logger = logger;
     }
 
@@ -70,10 +85,35 @@ public class SuperAdminHandler : ISuperAdminHandler
             return;
         }
 
-        var conv = GetConversation(telegramId);
-        if (conv.State != SuperAdminState.None)
+        if (text == BtnSkip)
         {
-            await HandleWizardStepAsync(chatId, telegramId, text, conv, ct);
+            var conv = GetConversation(telegramId);
+            if (conv.State == SuperAdminState.AwaitingCustomerPhone)
+            {
+                conv.PendingCustomerPhone = null;
+                conv.State = SuperAdminState.AwaitingCustomerUsername;
+                SaveConversation(telegramId, conv);
+                await SendAsync(chatId,
+                    "👤 یوزرنیم تلگرام ادمین فروشگاه را وارد کنید:\n<i>(بدون @ — یا رد شوید)</i>",
+                    BuildSkipCancelKeyboard(), ct);
+                return;
+            }
+            if (conv.State == SuperAdminState.AwaitingCustomerUsername)
+            {
+                conv.PendingCustomerUsername = null;
+                conv.State = SuperAdminState.AwaitingBotToken;
+                SaveConversation(telegramId, conv);
+                await SendAsync(chatId,
+                    "🤖 توکن بات تلگرام را وارد کنید:\n<i>(فرمت: 123456789:AAFxxxxxx)</i>",
+                    BuildCancelKeyboard(), ct);
+                return;
+            }
+        }
+
+        var convState = GetConversation(telegramId);
+        if (convState.State != SuperAdminState.None)
+        {
+            await HandleWizardStepAsync(chatId, telegramId, text, message, convState, ct);
             return;
         }
 
@@ -84,6 +124,9 @@ public class SuperAdminHandler : ISuperAdminHandler
             case BtnAddTenant:   await StartAddTenantWizardAsync(chatId, telegramId, ct); break;
             case BtnPlans:       await ShowPlansAsync(chatId, ct); break;
             case BtnImpersonate: await StartImpersonateAsync(chatId, telegramId, ct); break;
+            case BtnHealth:      await ShowHealthAsync(chatId, ct); break;
+            case BtnBackup:      await ShowBackupMenuAsync(chatId, ct); break;
+            case BtnRenewals:    await ShowPendingRenewalsAsync(chatId, ct); break;
             default:
                 await SendAsync(chatId, "❓ دستور نامعتبر. از منو استفاده کنید.", BuildMainMenuKeyboard(), ct);
                 break;
@@ -124,6 +167,26 @@ public class SuperAdminHandler : ISuperAdminHandler
             case "setplan":
                 await HandleSetPlanCallbackAsync(parts, chatId, ct);
                 break;
+
+            case "wizard":
+                await HandleWizardCallbackAsync(parts, chatId, telegramId, ct);
+                break;
+
+            case "notes":
+                await HandleNotesCallbackAsync(parts, chatId, telegramId, ct);
+                break;
+
+            case "health":
+                await HandleHealthCallbackAsync(parts, chatId, ct);
+                break;
+
+            case "backup":
+                await HandleBackupCallbackAsync(parts, chatId, callbackQuery.Message?.MessageId ?? 0, ct);
+                break;
+
+            case "renewal":
+                await HandleRenewalCallbackAsync(parts, chatId, ct);
+                break;
         }
     }
 
@@ -131,8 +194,11 @@ public class SuperAdminHandler : ISuperAdminHandler
 
     private async Task ShowMainMenuAsync(long chatId, CancellationToken ct)
     {
+        var pending = (await _renewalService.GetPendingRequestsAsync()).Count();
+        var pendingNote = pending > 0 ? $"\n\n🔔 <b>{pending} درخواست تمدید</b> در انتظار بررسی" : string.Empty;
+
         await SendAsync(chatId,
-            "🌟 <b>پنل سوپرادمین</b>\n\nبه داشبورد مدیریت پلتفرم خوش آمدید.",
+            $"🌟 <b>پنل سوپرادمین</b>\n\nبه داشبورد مدیریت پلتفرم خوش آمدید.{pendingNote}",
             BuildMainMenuKeyboard(), ct);
     }
 
@@ -140,20 +206,24 @@ public class SuperAdminHandler : ISuperAdminHandler
 
     private async Task ShowDashboardAsync(long chatId, CancellationToken ct)
     {
-        var allTenants    = (await _uow.Tenants.GetAllAsync()).ToList();
-        var active        = allTenants.Count(t => t.Status == TenantStatus.Active);
-        var pending       = allTenants.Count(t => t.Status == TenantStatus.PendingSetup);
-        var suspended     = allTenants.Count(t => t.Status == TenantStatus.Suspended);
-        var expired       = allTenants.Count(t => t.Status == TenantStatus.Expired);
-        var expiringSoon  = (await _uow.Tenants.GetExpiringTenantsAsync(7)).Count();
+        var allTenants   = (await _uow.Tenants.GetAllAsync()).ToList();
+        var active       = allTenants.Count(t => t.Status == TenantStatus.Active);
+        var pending      = allTenants.Count(t => t.Status == TenantStatus.PendingSetup);
+        var suspended    = allTenants.Count(t => t.Status == TenantStatus.Suspended);
+        var expired      = allTenants.Count(t => t.Status == TenantStatus.Expired);
+        var trial        = allTenants.Count(t => t.IsTrial);
+        var expiringSoon = (await _uow.Tenants.GetExpiringTenantsAsync(7)).Count();
+        var pendingRenew = (await _renewalService.GetPendingRequestsAsync()).Count();
 
         var html = "🌐 <b>داشبورد کل پلتفرم</b>\n\n" +
                    $"🏢 کل مشتریان: <b>{allTenants.Count}</b>\n" +
                    $"✅ فعال: <b>{active}</b>\n" +
+                   $"🧪 آزمایشی: <b>{trial}</b>\n" +
                    $"⏳ در انتظار راه‌اندازی: <b>{pending}</b>\n" +
                    $"🚫 معلق: <b>{suspended}</b>\n" +
                    $"❌ منقضی: <b>{expired}</b>\n" +
                    $"⚠️ در حال انقضا (۷ روز): <b>{expiringSoon}</b>\n\n" +
+                   (pendingRenew > 0 ? $"🔄 درخواست تمدید در انتظار: <b>{pendingRenew}</b>\n\n" : "") +
                    $"🕐 {DateTime.UtcNow:yyyy-MM-dd HH:mm} UTC";
 
         await SendAsync(chatId, html, BuildMainMenuKeyboard(), ct);
@@ -181,7 +251,7 @@ public class SuperAdminHandler : ISuperAdminHandler
         {
             var icon = t.Status switch
             {
-                TenantStatus.Active       => "✅",
+                TenantStatus.Active       => t.IsTrial ? "🧪" : "✅",
                 TenantStatus.PendingSetup => "⏳",
                 TenantStatus.Suspended    => "🚫",
                 TenantStatus.Expired      => "❌",
@@ -193,7 +263,7 @@ public class SuperAdminHandler : ISuperAdminHandler
         }
 
         var nav = new List<InlineKeyboardButton>();
-        if (page > 1)          nav.Add(InlineKeyboardButton.WithCallbackData("◀️ قبلی",  $"sa:tenants:page:{page - 1}"));
+        if (page > 1)               nav.Add(InlineKeyboardButton.WithCallbackData("◀️ قبلی",  $"sa:tenants:page:{page - 1}"));
         if (page * pageSize < total) nav.Add(InlineKeyboardButton.WithCallbackData("بعدی ▶️", $"sa:tenants:page:{page + 1}"));
         if (nav.Count > 0) rows.Add(nav.ToArray());
 
@@ -207,7 +277,6 @@ public class SuperAdminHandler : ISuperAdminHandler
         var idStr  = parts.ElementAtOrDefault(2);
         var action = parts.ElementAtOrDefault(3);
 
-        // Confirm/cancel new tenant creation
         if (idStr == "confirm" && long.TryParse(parts.ElementAtOrDefault(3), out var saId))
         {
             await FinalizeTenantCreationAsync(chatId, saId, ct);
@@ -227,27 +296,38 @@ public class SuperAdminHandler : ISuperAdminHandler
         switch (action)
         {
             case "suspend":
-                tenant.Status   = TenantStatus.Suspended;
-                tenant.IsActive = false;
-                _uow.Tenants.Update(tenant);
-                await _uow.SaveChangesAsync(ct);
-                _logger.LogInformation("SuperAdmin suspended tenant {Id} ({Name})", tenantId, tenant.TenantName);
-                await SendAsync(chatId, $"🚫 مشتری <b>{tenant.TenantName}</b> معلق شد.", null, ct);
-                await ShowTenantDetailAsync(chatId, tenantId, ct);
+                // Collect suspension reason first
+                var convS = GetConversation(telegramId);
+                convS.State = SuperAdminState.AwaitingSuspensionReason;
+                convS.PendingSuspendTenantId = tenantId;
+                SaveConversation(telegramId, convS);
+                await SendAsync(chatId,
+                    $"🚫 <b>تعلیق {tenant.TenantName}</b>\n\nدلیل تعلیق را وارد کنید:",
+                    BuildCancelKeyboard(), ct);
                 break;
 
             case "activate":
-                tenant.Status   = TenantStatus.Active;
-                tenant.IsActive = true;
+                tenant.Status        = TenantStatus.Active;
+                tenant.IsActive      = true;
+                tenant.SuspendedAt   = null;
+                tenant.SuspendedReason = null;
                 _uow.Tenants.Update(tenant);
                 await _uow.SaveChangesAsync(ct);
-                _logger.LogInformation("SuperAdmin activated tenant {Id} ({Name})", tenantId, tenant.TenantName);
+                _logger.LogInformation("SuperAdmin activated tenant {Id}", tenantId);
                 await SendAsync(chatId, $"✅ مشتری <b>{tenant.TenantName}</b> فعال شد.", null, ct);
                 await ShowTenantDetailAsync(chatId, tenantId, ct);
                 break;
 
             case "plans":
                 await ShowPlanPickerForTenantAsync(chatId, tenantId, ct);
+                break;
+
+            case "notes":
+                await ShowTenantNotesAsync(chatId, tenantId, 1, ct);
+                break;
+
+            case "webhook":
+                await RetryWebhookAsync(chatId, tenantId, ct);
                 break;
 
             default:
@@ -265,16 +345,34 @@ public class SuperAdminHandler : ISuperAdminHandler
             ? tenant.ExpiresAt.Value.ToString("yyyy-MM-dd")
             : "♾ بدون انقضا";
 
-        var html = $"🏢 <b>{tenant.TenantName}</b>\n" +
-                   $"🔗 Slug: <code>{tenant.TenantSlug}</code>\n" +
-                   $"📊 وضعیت: {GetStatusLabel(tenant.Status)}\n" +
-                   (tenant.CustomerName  != null ? $"👤 مشتری: {tenant.CustomerName}\n"  : "") +
-                   (tenant.CustomerPhone != null ? $"📞 تلفن: {tenant.CustomerPhone}\n"  : "") +
-                   (tenant.BotUsername   != null ? $"🤖 بات: @{tenant.BotUsername}\n"    : "") +
-                   $"⏰ انقضا: {expiry}\n" +
-                   $"👥 حداکثر کاربر: {tenant.MaxUsers}\n" +
-                   $"📦 حداکثر محصول: {tenant.MaxProducts}\n" +
-                   $"🗓 ایجاد: {tenant.CreatedAt:yyyy-MM-dd}";
+        var daysLeft = tenant.ExpiresAt.HasValue
+            ? (int)(tenant.ExpiresAt.Value - DateTime.UtcNow).TotalDays
+            : (int?)null;
+
+        var notes = (await _uow.TenantNotes.GetByTenantIdAsync(tenantId)).ToList();
+        var health = _botHealth.GetStatus(tenantId);
+
+        var sb = new StringBuilder();
+        sb.AppendLine($"🏢 <b>{tenant.TenantName}</b>");
+        if (tenant.IsTrial) sb.AppendLine("🧪 <i>آزمایشی</i>");
+        sb.AppendLine($"🔗 Slug: <code>{tenant.TenantSlug}</code>");
+        sb.AppendLine($"📊 وضعیت: {GetStatusLabel(tenant.Status)}");
+        if (tenant.CustomerName  != null) sb.AppendLine($"👤 مشتری: {tenant.CustomerName}");
+        if (tenant.CustomerPhone != null) sb.AppendLine($"📞 تلفن: {tenant.CustomerPhone}");
+        if (tenant.CustomerEmail != null) sb.AppendLine($"📧 ایمیل: {tenant.CustomerEmail}");
+        if (tenant.BotUsername   != null) sb.AppendLine($"🤖 بات: @{tenant.BotUsername}");
+        if (health is not null) sb.AppendLine($"📶 سلامت بات: {(health.IsOnline ? "🟢 آنلاین" : "🔴 آفلاین")}");
+        sb.AppendLine($"⏰ انقضا: {expiry}");
+        if (daysLeft.HasValue) sb.AppendLine($"📅 روز باقی‌مانده: <b>{daysLeft}</b>");
+        sb.AppendLine($"👥 کاربر: {tenant.MaxUsers} | 📦 محصول: {tenant.MaxProducts} | 👑 ادمین: {tenant.MaxAdmins}");
+        if (tenant.Status == TenantStatus.Suspended && tenant.SuspendedReason != null)
+        {
+            sb.AppendLine($"🚫 دلیل تعلیق: <i>{tenant.SuspendedReason}</i>");
+            if (tenant.SuspendedAt.HasValue)
+                sb.AppendLine($"📅 تاریخ تعلیق: {tenant.SuspendedAt.Value:yyyy-MM-dd HH:mm}");
+        }
+        sb.AppendLine($"📝 یادداشت: {notes.Count} مورد");
+        sb.AppendLine($"🗓 ایجاد: {tenant.CreatedAt:yyyy-MM-dd}");
 
         var rows = new List<InlineKeyboardButton[]>();
 
@@ -283,10 +381,15 @@ public class SuperAdminHandler : ISuperAdminHandler
         if (tenant.Status != TenantStatus.Active)
             rows.Add(new[] { InlineKeyboardButton.WithCallbackData("✅ فعال‌سازی", $"sa:tenant:{tenantId}:activate") });
 
-        rows.Add(new[] { InlineKeyboardButton.WithCallbackData("📋 تغییر پلن", $"sa:tenant:{tenantId}:plans") });
+        rows.Add(new[]
+        {
+            InlineKeyboardButton.WithCallbackData("📋 تغییر پلن", $"sa:tenant:{tenantId}:plans"),
+            InlineKeyboardButton.WithCallbackData("📝 یادداشت‌ها", $"sa:tenant:{tenantId}:notes")
+        });
+        rows.Add(new[] { InlineKeyboardButton.WithCallbackData("🔄 تنظیم وب‌هوک", $"sa:tenant:{tenantId}:webhook") });
         rows.Add(new[] { InlineKeyboardButton.WithCallbackData("⬅️ بازگشت", "sa:tenants:page:1") });
 
-        await SendAsync(chatId, html, new InlineKeyboardMarkup(rows), ct);
+        await SendAsync(chatId, sb.ToString(), new InlineKeyboardMarkup(rows), ct);
     }
 
     // ── Plans ─────────────────────────────────────────────────────────────────
@@ -360,10 +463,11 @@ public class SuperAdminHandler : ISuperAdminHandler
         var plan   = await _uow.SubscriptionPlans.GetByIdAsync(planId);
         if (tenant is null || plan is null) return;
 
-        tenant.PlanId       = planId;
-        tenant.MaxUsers     = plan.MaxUsers;
-        tenant.MaxProducts  = plan.MaxProducts;
-        tenant.MaxAdmins    = plan.MaxAdmins;
+        tenant.PlanId              = planId;
+        tenant.MaxUsers            = plan.MaxUsers;
+        tenant.MaxProducts         = plan.MaxProducts;
+        tenant.MaxAdmins           = plan.MaxAdmins;
+        tenant.MaxOrdersPerMonth   = plan.MaxOrdersPerMonth;
         _uow.Tenants.Update(tenant);
         await _uow.SaveChangesAsync(ct);
 
@@ -372,33 +476,57 @@ public class SuperAdminHandler : ISuperAdminHandler
         await ShowTenantDetailAsync(chatId, tenantId, ct);
     }
 
-    // ── Add-tenant wizard ─────────────────────────────────────────────────────
+    // ── Add-tenant wizard (7-step) ─────────────────────────────────────────────
 
     private async Task StartAddTenantWizardAsync(long chatId, long telegramId, CancellationToken ct)
     {
         SaveConversation(telegramId, new SuperAdminConversation { State = SuperAdminState.AwaitingTenantName });
         await SendAsync(chatId,
-            "➕ <b>افزودن مشتری جدید</b>\n\n📝 نام فروشگاه یا مشتری را وارد کنید:",
+            "➕ <b>افزودن مشتری جدید</b>\n\n<b>مرحله ۱ از ۷</b>\n📝 نام فروشگاه را وارد کنید:",
             BuildCancelKeyboard(), ct);
     }
 
-    private async Task HandleWizardStepAsync(long chatId, long telegramId, string text, SuperAdminConversation conv, CancellationToken ct)
+    private async Task HandleWizardStepAsync(
+        long chatId, long telegramId, string text, Message message,
+        SuperAdminConversation conv, CancellationToken ct)
     {
         switch (conv.State)
         {
             case SuperAdminState.AwaitingTenantName:
-                if (string.IsNullOrWhiteSpace(text))
-                {
-                    await SendAsync(chatId, "❌ نام نمی‌تواند خالی باشد. دوباره وارد کنید:", null, ct);
-                    return;
-                }
+                if (string.IsNullOrWhiteSpace(text)) { await SendAsync(chatId, "❌ نام نمی‌تواند خالی باشد.", null, ct); return; }
                 conv.PendingTenantName = text.Trim();
+                conv.State = SuperAdminState.AwaitingCustomerName;
+                SaveConversation(telegramId, conv);
+                await SendAsync(chatId,
+                    $"✅ نام فروشگاه: <b>{conv.PendingTenantName}</b>\n\n<b>مرحله ۲ از ۷</b>\n👤 نام مشتری را وارد کنید:",
+                    BuildCancelKeyboard(), ct);
+                break;
+
+            case SuperAdminState.AwaitingCustomerName:
+                if (string.IsNullOrWhiteSpace(text)) { await SendAsync(chatId, "❌ نام نمی‌تواند خالی باشد.", null, ct); return; }
+                conv.PendingCustomerName = text.Trim();
+                conv.State = SuperAdminState.AwaitingCustomerPhone;
+                SaveConversation(telegramId, conv);
+                await SendAsync(chatId,
+                    $"✅ نام مشتری: <b>{conv.PendingCustomerName}</b>\n\n<b>مرحله ۳ از ۷</b>\n📞 شماره تماس مشتری را وارد کنید:\n<i>(یا رد شوید)</i>",
+                    BuildSkipCancelKeyboard(), ct);
+                break;
+
+            case SuperAdminState.AwaitingCustomerPhone:
+                conv.PendingCustomerPhone = text.Trim();
+                conv.State = SuperAdminState.AwaitingCustomerUsername;
+                SaveConversation(telegramId, conv);
+                await SendAsync(chatId,
+                    $"✅ تلفن: <b>{conv.PendingCustomerPhone}</b>\n\n<b>مرحله ۴ از ۷</b>\n👤 یوزرنیم تلگرام ادمین را وارد کنید:\n<i>(بدون @ — یا رد شوید)</i>",
+                    BuildSkipCancelKeyboard(), ct);
+                break;
+
+            case SuperAdminState.AwaitingCustomerUsername:
+                conv.PendingCustomerUsername = text.TrimStart('@').Trim();
                 conv.State = SuperAdminState.AwaitingBotToken;
                 SaveConversation(telegramId, conv);
                 await SendAsync(chatId,
-                    $"✅ نام: <b>{conv.PendingTenantName}</b>\n\n" +
-                    "🤖 توکن بات تلگرام را وارد کنید:\n" +
-                    "<i>(فرمت: 123456789:AAFxxxxxx)</i>",
+                    $"✅ یوزرنیم: <b>@{conv.PendingCustomerUsername}</b>\n\n<b>مرحله ۵ از ۷</b>\n🤖 توکن بات تلگرام را وارد کنید:\n<i>(فرمت: 123456789:AAFxxxxxx)</i>",
                     BuildCancelKeyboard(), ct);
                 break;
 
@@ -407,30 +535,34 @@ public class SuperAdminHandler : ISuperAdminHandler
                 if (!IsValidBotTokenFormat(token))
                 {
                     await SendAsync(chatId,
-                        "❌ فرمت توکن نامعتبر است.\n" +
-                        "توکن باید به شکل <code>123456789:AAFxxxxxx</code> باشد.\n\n" +
-                        "دوباره وارد کنید:", null, ct);
+                        "❌ فرمت توکن نامعتبر است.\nدوباره وارد کنید:", null, ct);
                     return;
                 }
                 conv.PendingBotToken = token;
-                conv.State = SuperAdminState.ConfirmAddTenant;
+                conv.State = SuperAdminState.AwaitingSubscriptionType;
                 SaveConversation(telegramId, conv);
-
-                var slug = GenerateSlug(conv.PendingTenantName!);
                 await SendAsync(chatId,
-                    "📋 <b>تأیید اطلاعات:</b>\n\n" +
-                    $"🏢 نام: <b>{conv.PendingTenantName}</b>\n" +
-                    $"🔗 Slug (پیش‌نویس): <code>{slug}</code>\n" +
-                    $"🤖 توکن: <code>{MaskToken(token)}</code>\n\n" +
-                    "آیا اطلاعات را تأیید می‌کنید؟",
+                    $"✅ توکن ذخیره شد.\n\n<b>مرحله ۶ از ۷</b>\nنوع اشتراک را انتخاب کنید:",
                     new InlineKeyboardMarkup(new[]
                     {
                         new[]
                         {
-                            InlineKeyboardButton.WithCallbackData("✅ تأیید",  $"sa:tenant:confirm:{telegramId}"),
-                            InlineKeyboardButton.WithCallbackData("❌ لغو",    $"sa:tenant:cancel:{telegramId}")
+                            InlineKeyboardButton.WithCallbackData("💼 اشتراک پولی", $"sa:wizard:subtype:paid:{telegramId}"),
+                            InlineKeyboardButton.WithCallbackData("🧪 آزمایشی رایگان", $"sa:wizard:subtype:trial:{telegramId}")
                         }
                     }), ct);
+                break;
+
+            case SuperAdminState.AwaitingSuspensionReason:
+                if (string.IsNullOrWhiteSpace(text)) { await SendAsync(chatId, "❌ دلیل نمی‌تواند خالی باشد.", null, ct); return; }
+                await ExecuteSuspensionAsync(chatId, conv.PendingSuspendTenantId, text.Trim(), ct);
+                ClearConversation(telegramId);
+                break;
+
+            case SuperAdminState.AwaitingTenantNote:
+                if (string.IsNullOrWhiteSpace(text)) { await SendAsync(chatId, "❌ یادداشت نمی‌تواند خالی باشد.", null, ct); return; }
+                await AddTenantNoteAsync(chatId, telegramId, conv.PendingNoteTenantId, text.Trim(), ct);
+                ClearConversation(telegramId);
                 break;
 
             case SuperAdminState.AwaitingImpersonateTenantSlug:
@@ -438,6 +570,134 @@ public class SuperAdminHandler : ISuperAdminHandler
                 await HandleImpersonateInputAsync(chatId, text.Trim(), ct);
                 break;
         }
+    }
+
+    // ── Wizard inline-keyboard callbacks ─────────────────────────────────────
+
+    private async Task HandleWizardCallbackAsync(string[] parts, long chatId, long telegramId, CancellationToken ct)
+    {
+        var step  = parts.ElementAtOrDefault(2);
+        var value = parts.ElementAtOrDefault(3);
+        var saId  = long.TryParse(parts.ElementAtOrDefault(4), out var sid) ? sid : telegramId;
+
+        var conv = GetConversation(saId);
+        if (conv.State == SuperAdminState.None && step != "subtype")
+        {
+            await SendAsync(chatId, "❌ جلسه منقضی شده است. دوباره شروع کنید.", BuildMainMenuKeyboard(), ct);
+            return;
+        }
+
+        switch (step)
+        {
+            case "subtype":
+                if (value == "paid")
+                {
+                    conv.PendingIsTrial = false;
+                    conv.State = SuperAdminState.AwaitingPlanSelection;
+                    SaveConversation(saId, conv);
+
+                    var plans = (await _uow.SubscriptionPlans.GetAllAsync()).Where(p => p.IsActive).ToList();
+                    var rows  = plans.Select(p => new[]
+                    {
+                        InlineKeyboardButton.WithCallbackData(
+                            $"{p.Name} ({p.MonthlyPrice:F0} تومان/ماه)",
+                            $"sa:wizard:plan:{p.Id}:{saId}")
+                    }).ToArray();
+
+                    await SendAsync(chatId,
+                        "<b>مرحله ۶ از ۷</b>\nپلن اشتراک را انتخاب کنید:",
+                        new InlineKeyboardMarkup(rows), ct);
+                }
+                else
+                {
+                    conv.PendingIsTrial = true;
+                    conv.State = SuperAdminState.AwaitingTrialDuration;
+                    SaveConversation(saId, conv);
+
+                    await SendAsync(chatId,
+                        "<b>مرحله ۶ از ۷</b>\nمدت آزمایشی را انتخاب کنید:",
+                        new InlineKeyboardMarkup(new[]
+                        {
+                            new[]
+                            {
+                                InlineKeyboardButton.WithCallbackData("۷ روز",  $"sa:wizard:trial:7:{saId}"),
+                                InlineKeyboardButton.WithCallbackData("۱۴ روز", $"sa:wizard:trial:14:{saId}"),
+                                InlineKeyboardButton.WithCallbackData("۳۰ روز", $"sa:wizard:trial:30:{saId}")
+                            }
+                        }), ct);
+                }
+                break;
+
+            case "plan":
+                if (!int.TryParse(value, out var planId)) return;
+                var plan = await _uow.SubscriptionPlans.GetByIdAsync(planId);
+                if (plan is null) return;
+
+                conv.PendingPlanId = planId;
+                conv.State = SuperAdminState.AwaitingDurationSelection;
+                SaveConversation(saId, conv);
+
+                await SendAsync(chatId,
+                    $"✅ پلن: <b>{plan.Name}</b>\n\n<b>مرحله ۷ از ۷</b>\nمدت اشتراک را انتخاب کنید:",
+                    new InlineKeyboardMarkup(new[]
+                    {
+                        new[]
+                        {
+                            InlineKeyboardButton.WithCallbackData("۱ ماه",  $"sa:wizard:duration:1:{saId}"),
+                            InlineKeyboardButton.WithCallbackData("۳ ماه",  $"sa:wizard:duration:3:{saId}")
+                        },
+                        new[]
+                        {
+                            InlineKeyboardButton.WithCallbackData("۶ ماه",  $"sa:wizard:duration:6:{saId}"),
+                            InlineKeyboardButton.WithCallbackData("۱۲ ماه", $"sa:wizard:duration:12:{saId}")
+                        }
+                    }), ct);
+                break;
+
+            case "duration":
+                if (!int.TryParse(value, out var months)) return;
+                conv.PendingDurationMonths = months;
+                conv.State = SuperAdminState.ConfirmAddTenant;
+                SaveConversation(saId, conv);
+                await ShowWizardConfirmationAsync(chatId, saId, conv, ct);
+                break;
+
+            case "trial":
+                if (!int.TryParse(value, out var days)) return;
+                conv.PendingTrialDays = days;
+                conv.State = SuperAdminState.ConfirmAddTenant;
+                SaveConversation(saId, conv);
+                await ShowWizardConfirmationAsync(chatId, saId, conv, ct);
+                break;
+        }
+    }
+
+    private async Task ShowWizardConfirmationAsync(long chatId, long saId, SuperAdminConversation conv, CancellationToken ct)
+    {
+        var slug = GenerateSlug(conv.PendingTenantName ?? "");
+        var subInfo = conv.PendingIsTrial
+            ? $"🧪 آزمایشی: <b>{conv.PendingTrialDays} روز</b>"
+            : $"💼 پلن: <b>#{conv.PendingPlanId}</b> — <b>{conv.PendingDurationMonths} ماه</b>";
+
+        var html = "📋 <b>تأیید اطلاعات مشتری جدید:</b>\n\n" +
+                   $"🏢 فروشگاه: <b>{conv.PendingTenantName}</b>\n" +
+                   $"🔗 Slug: <code>{slug}</code>\n" +
+                   $"👤 مشتری: <b>{conv.PendingCustomerName}</b>\n" +
+                   (conv.PendingCustomerPhone != null ? $"📞 تلفن: {conv.PendingCustomerPhone}\n" : "") +
+                   (conv.PendingCustomerUsername != null ? $"👤 یوزرنیم: @{conv.PendingCustomerUsername}\n" : "") +
+                   $"🤖 توکن: <code>{MaskToken(conv.PendingBotToken ?? "")}</code>\n" +
+                   subInfo + "\n\n" +
+                   "آیا اطلاعات را تأیید می‌کنید؟";
+
+        await SendAsync(chatId, html,
+            new InlineKeyboardMarkup(new[]
+            {
+                new[]
+                {
+                    InlineKeyboardButton.WithCallbackData("✅ تأیید", $"sa:tenant:confirm:{saId}"),
+                    InlineKeyboardButton.WithCallbackData("❌ لغو",   $"sa:tenant:cancel:{saId}")
+                }
+            }), ct);
     }
 
     private async Task FinalizeTenantCreationAsync(long chatId, long saId, CancellationToken ct)
@@ -448,18 +708,18 @@ public class SuperAdminHandler : ISuperAdminHandler
             string.IsNullOrEmpty(conv.PendingBotToken))
         {
             ClearConversation(saId);
-            await SendAsync(chatId, "❌ اطلاعات نامعتبر یا منقضی شده است. لطفاً دوباره امتحان کنید.", BuildMainMenuKeyboard(), ct);
+            await SendAsync(chatId, "❌ اطلاعات منقضی شده. دوباره امتحان کنید.", BuildMainMenuKeyboard(), ct);
             return;
         }
 
         ClearConversation(saId);
-        await CreateTenantAsync(chatId, conv.PendingTenantName, conv.PendingBotToken, ct);
+        await CreateTenantAsync(chatId, conv, ct);
     }
 
-    private async Task CreateTenantAsync(long chatId, string tenantName, string rawToken, CancellationToken ct)
+    private async Task CreateTenantAsync(long chatId, SuperAdminConversation conv, CancellationToken ct)
     {
-        var slug           = await GenerateUniqueSlugAsync(tenantName);
-        var encryptedToken = _aes.Encrypt(rawToken);
+        var slug           = await GenerateUniqueSlugAsync(conv.PendingTenantName!);
+        var encryptedToken = _aes.Encrypt(conv.PendingBotToken!);
         var webhookSecret  = Guid.NewGuid().ToString("N")[..32];
 
         string? botUsername = null;
@@ -467,7 +727,7 @@ public class SuperAdminHandler : ISuperAdminHandler
 
         try
         {
-            var newClient = new TelegramBotClient(rawToken);
+            var newClient = new TelegramBotClient(conv.PendingBotToken!);
             var me = await newClient.GetMe(ct);
             botUsername = me.Username;
 
@@ -484,39 +744,548 @@ public class SuperAdminHandler : ISuperAdminHandler
             _logger.LogWarning(ex, "Could not auto-set webhook for tenant {Slug}", slug);
         }
 
+        SubscriptionPlan? plan = null;
+        if (!conv.PendingIsTrial && conv.PendingPlanId > 0)
+            plan = await _uow.SubscriptionPlans.GetByIdAsync(conv.PendingPlanId);
+
+        var expiresAt = conv.PendingIsTrial
+            ? DateTime.UtcNow.AddDays(conv.PendingTrialDays)
+            : DateTime.UtcNow.AddMonths(conv.PendingDurationMonths);
+
         var tenant = new Tenant
         {
-            TenantName        = tenantName,
-            TenantSlug        = slug,
-            BotTokenEncrypted = encryptedToken,
-            WebhookSecret     = webhookSecret,
-            BotUsername       = botUsername,
-            Status            = webhookSet ? TenantStatus.Active : TenantStatus.PendingSetup,
-            IsActive          = webhookSet,
-            PlanId            = 1,
-            MaxUsers          = 500,
-            MaxProducts       = 50,
-            MaxAdmins         = 2,
+            TenantName          = conv.PendingTenantName!,
+            TenantSlug          = slug,
+            CustomerName        = conv.PendingCustomerName,
+            CustomerPhone       = conv.PendingCustomerPhone,
+            BotTokenEncrypted   = encryptedToken,
+            WebhookSecret       = webhookSecret,
+            BotUsername         = botUsername,
+            Status              = webhookSet ? TenantStatus.Active : TenantStatus.PendingSetup,
+            IsActive            = webhookSet,
+            PlanId              = plan?.Id ?? 1,
+            MaxUsers            = plan?.MaxUsers ?? 500,
+            MaxProducts         = plan?.MaxProducts ?? 50,
+            MaxAdmins           = plan?.MaxAdmins ?? 2,
+            MaxOrdersPerMonth   = plan?.MaxOrdersPerMonth ?? 200,
+            ExpiresAt           = expiresAt,
+            TrialEndsAt         = conv.PendingIsTrial ? expiresAt : null,
+            IsTrial             = conv.PendingIsTrial,
         };
 
         await _uow.Tenants.AddAsync(tenant);
         await _uow.SaveChangesAsync(ct);
 
-        _logger.LogInformation("SuperAdmin created tenant #{Id} ({Slug})", tenant.Id, slug);
+        _logger.LogInformation("SuperAdmin created tenant #{Id} ({Slug}) IsTrial={IsTrial}", tenant.Id, slug, conv.PendingIsTrial);
 
         var statusNote = webhookSet
             ? $"✅ وب‌هوک ثبت شد:\n<code>{_opts.WebhookBaseUrl?.TrimEnd('/')}/api/telegram/{slug}/webhook</code>"
-            : "⚠️ وب‌هوک به طور خودکار ثبت نشد.\n" +
-              "مقدار <code>Telegram:WebhookBaseUrl</code> را در تنظیمات بررسی کنید.";
+            : "⚠️ وب‌هوک ثبت نشد — <code>Telegram:WebhookBaseUrl</code> را بررسی کنید.";
+
+        var trialInfo = conv.PendingIsTrial
+            ? $"🧪 آزمایشی: <b>{conv.PendingTrialDays} روز</b>\n⏰ انقضا: <b>{expiresAt:yyyy-MM-dd}</b>"
+            : $"💼 پلن: <b>{plan?.Name ?? "پیش‌فرض"}</b> — <b>{conv.PendingDurationMonths} ماه</b>\n⏰ انقضا: <b>{expiresAt:yyyy-MM-dd}</b>";
 
         var html = "🎉 <b>مشتری جدید با موفقیت ثبت شد!</b>\n\n" +
-                   $"🏢 نام: <b>{tenantName}</b>\n" +
+                   $"🏢 فروشگاه: <b>{conv.PendingTenantName}</b>\n" +
+                   $"👤 مشتری: <b>{conv.PendingCustomerName}</b>\n" +
                    $"🔗 Slug: <code>{slug}</code>\n" +
                    $"🆔 شناسه: #{tenant.Id}\n" +
                    (botUsername != null ? $"🤖 بات: @{botUsername}\n" : "") +
-                   $"\n{statusNote}";
+                   $"{trialInfo}\n\n" +
+                   statusNote;
 
         await SendAsync(chatId, html, BuildMainMenuKeyboard(), ct);
+    }
+
+    // ── Suspension with reason ────────────────────────────────────────────────
+
+    private async Task ExecuteSuspensionAsync(long chatId, int tenantId, string reason, CancellationToken ct)
+    {
+        var tenant = await _uow.Tenants.GetByIdAsync(tenantId);
+        if (tenant is null) { await SendAsync(chatId, "❌ مشتری یافت نشد.", BuildMainMenuKeyboard(), ct); return; }
+
+        tenant.Status          = TenantStatus.Suspended;
+        tenant.IsActive        = false;
+        tenant.SuspendedReason = reason;
+        tenant.SuspendedAt     = DateTime.UtcNow;
+        _uow.Tenants.Update(tenant);
+        await _uow.SaveChangesAsync(ct);
+
+        _logger.LogInformation("SuperAdmin suspended tenant {Id} — reason: {Reason}", tenantId, reason);
+        await SendAsync(chatId, $"🚫 مشتری <b>{tenant.TenantName}</b> معلق شد.\n\nدلیل: <i>{reason}</i>", null, ct);
+        await ShowTenantDetailAsync(chatId, tenantId, ct);
+    }
+
+    // ── Tenant Notes / CRM ────────────────────────────────────────────────────
+
+    private async Task HandleNotesCallbackAsync(string[] parts, long chatId, long telegramId, CancellationToken ct)
+    {
+        var action   = parts.ElementAtOrDefault(2);
+        var tenantId = int.TryParse(parts.ElementAtOrDefault(3), out var tid) ? tid : 0;
+        var noteId   = int.TryParse(parts.ElementAtOrDefault(4), out var nid) ? nid : 0;
+
+        switch (action)
+        {
+            case var _ when int.TryParse(action, out var page) && tenantId == 0:
+                // sa:notes:{tenantId} — show notes for tenantId stored in action slot
+                await ShowTenantNotesAsync(chatId, page, 1, ct);
+                break;
+
+            case "add":
+                var conv = GetConversation(telegramId);
+                conv.State = SuperAdminState.AwaitingTenantNote;
+                conv.PendingNoteTenantId = tenantId;
+                SaveConversation(telegramId, conv);
+                await SendAsync(chatId, "📝 یادداشت جدید را وارد کنید:", BuildCancelKeyboard(), ct);
+                break;
+
+            case "del":
+                await DeleteTenantNoteAsync(chatId, tenantId, noteId, ct);
+                break;
+
+            case "page":
+                var pg = int.TryParse(parts.ElementAtOrDefault(4), out var p) ? p : 1;
+                await ShowTenantNotesAsync(chatId, tenantId, pg, ct);
+                break;
+        }
+    }
+
+    private async Task ShowTenantNotesAsync(long chatId, int tenantId, int page, CancellationToken ct)
+    {
+        const int pageSize = 5;
+        var tenant = await _uow.Tenants.GetByIdAsync(tenantId);
+        if (tenant is null) return;
+
+        var notes = (await _uow.TenantNotes.GetByTenantIdAsync(tenantId)).ToList();
+        var paged = notes.Skip((page - 1) * pageSize).Take(pageSize).ToList();
+
+        var sb = new StringBuilder();
+        sb.AppendLine($"📝 <b>یادداشت‌های {tenant.TenantName}</b> ({notes.Count} مورد)");
+        sb.AppendLine();
+
+        var rows = new List<InlineKeyboardButton[]>();
+
+        foreach (var note in paged)
+        {
+            sb.AppendLine($"• {note.Note}");
+            sb.AppendLine($"  <i>{note.CreatedAt:yyyy-MM-dd HH:mm}</i>");
+            sb.AppendLine();
+            rows.Add(new[]
+            {
+                InlineKeyboardButton.WithCallbackData($"🗑 حذف ({note.CreatedAt:MM/dd})", $"sa:notes:del:{tenantId}:{note.Id}")
+            });
+        }
+
+        if (notes.Count == 0) sb.AppendLine("هیچ یادداشتی ثبت نشده است.");
+
+        var nav = new List<InlineKeyboardButton>();
+        if (page > 1)                    nav.Add(InlineKeyboardButton.WithCallbackData("◀️", $"sa:notes:page:{tenantId}:{page - 1}"));
+        if (page * pageSize < notes.Count) nav.Add(InlineKeyboardButton.WithCallbackData("▶️", $"sa:notes:page:{tenantId}:{page + 1}"));
+        if (nav.Count > 0) rows.Add(nav.ToArray());
+
+        rows.Add(new[]
+        {
+            InlineKeyboardButton.WithCallbackData("➕ افزودن یادداشت", $"sa:notes:add:{tenantId}"),
+            InlineKeyboardButton.WithCallbackData("⬅️ بازگشت",         $"sa:tenant:{tenantId}")
+        });
+
+        await SendAsync(chatId, sb.ToString(), new InlineKeyboardMarkup(rows), ct);
+    }
+
+    private async Task AddTenantNoteAsync(long chatId, long superAdminId, int tenantId, string note, CancellationToken ct)
+    {
+        var tenant = await _uow.Tenants.GetByIdAsync(tenantId);
+        if (tenant is null) { await SendAsync(chatId, "❌ مشتری یافت نشد.", BuildMainMenuKeyboard(), ct); return; }
+
+        var newNote = new TenantNote
+        {
+            TenantId               = tenantId,
+            Note                   = note,
+            CreatedBySuperAdminId  = superAdminId
+        };
+        await _uow.TenantNotes.AddAsync(newNote);
+        await _uow.SaveChangesAsync(ct);
+
+        await SendAsync(chatId, $"✅ یادداشت برای <b>{tenant.TenantName}</b> ثبت شد.", null, ct);
+        await ShowTenantNotesAsync(chatId, tenantId, 1, ct);
+    }
+
+    private async Task DeleteTenantNoteAsync(long chatId, int tenantId, int noteId, CancellationToken ct)
+    {
+        var note = await _uow.TenantNotes.GetByIdAsync(noteId);
+        if (note is null) { await SendAsync(chatId, "❌ یادداشت یافت نشد.", null, ct); return; }
+
+        _uow.TenantNotes.Remove(note);
+        await _uow.SaveChangesAsync(ct);
+
+        await SendAsync(chatId, "🗑 یادداشت حذف شد.", null, ct);
+        await ShowTenantNotesAsync(chatId, tenantId, 1, ct);
+    }
+
+    // ── Health Monitoring ─────────────────────────────────────────────────────
+
+    private async Task ShowHealthAsync(long chatId, CancellationToken ct)
+    {
+        var allStatuses = _botHealth.GetAllStatuses();
+        var online  = allStatuses.Count(s => s.IsOnline);
+        var offline = allStatuses.Count(s => !s.IsOnline);
+
+        var sb = new StringBuilder();
+        sb.AppendLine("📡 <b>سلامت سیستم</b>\n");
+        sb.AppendLine($"🟢 آنلاین: <b>{online}</b>  🔴 آفلاین: <b>{offline}</b>");
+        sb.AppendLine($"📊 کل بررسی‌شده: {allStatuses.Count}");
+        sb.AppendLine();
+
+        if (allStatuses.Count > 0)
+        {
+            sb.AppendLine("<b>وضعیت بات‌ها:</b>");
+            foreach (var s in allStatuses.Take(15))
+            {
+                var icon = s.IsOnline ? "🟢" : "🔴";
+                sb.AppendLine($"{icon} {s.TenantName}" +
+                              (s.BotUsername != null ? $" (@{s.BotUsername})" : "") +
+                              $" — <i>{s.CheckedAt:HH:mm}</i>");
+            }
+            if (allStatuses.Count > 15)
+                sb.AppendLine($"<i>... و {allStatuses.Count - 15} مورد دیگر</i>");
+        }
+        else
+        {
+            sb.AppendLine("<i>هنوز بررسی انجام نشده است. چند دقیقه صبر کنید.</i>");
+        }
+
+        var rows = new List<InlineKeyboardButton[]>
+        {
+            new[] { InlineKeyboardButton.WithCallbackData("🔄 بروزرسانی", "sa:health:refresh") }
+        };
+
+        if (offline > 0)
+        {
+            foreach (var s in allStatuses.Where(x => !x.IsOnline).Take(5))
+                rows.Add(new[] { InlineKeyboardButton.WithCallbackData($"🔄 تنظیم وب‌هوک @{s.BotUsername ?? s.TenantName}", $"sa:health:retry:{s.TenantId}") });
+        }
+
+        await SendAsync(chatId, sb.ToString(), new InlineKeyboardMarkup(rows), ct);
+    }
+
+    private async Task HandleHealthCallbackAsync(string[] parts, long chatId, CancellationToken ct)
+    {
+        var action = parts.ElementAtOrDefault(2);
+
+        switch (action)
+        {
+            case "refresh":
+                await ShowHealthAsync(chatId, ct);
+                break;
+
+            case "retry" when int.TryParse(parts.ElementAtOrDefault(3), out var tenantId):
+                await RetryWebhookAsync(chatId, tenantId, ct);
+                break;
+        }
+    }
+
+    private async Task RetryWebhookAsync(long chatId, int tenantId, CancellationToken ct)
+    {
+        var tenant = await _uow.Tenants.GetByIdAsync(tenantId);
+        if (tenant is null) { await SendAsync(chatId, "❌ مشتری یافت نشد.", null, ct); return; }
+        if (string.IsNullOrWhiteSpace(_opts.WebhookBaseUrl))
+        {
+            await SendAsync(chatId, "❌ مقدار <code>Telegram:WebhookBaseUrl</code> تنظیم نشده است.", null, ct);
+            return;
+        }
+
+        try
+        {
+            var decryptedToken = _aes.Decrypt(tenant.BotTokenEncrypted);
+            var client = new TelegramBotClient(decryptedToken);
+            var webhookUrl = $"{_opts.WebhookBaseUrl.TrimEnd('/')}/api/telegram/{tenant.TenantSlug}/webhook";
+            await client.SetWebhook(webhookUrl, secretToken: tenant.WebhookSecret, cancellationToken: ct);
+
+            if (tenant.Status == TenantStatus.PendingSetup)
+            {
+                tenant.Status   = TenantStatus.Active;
+                tenant.IsActive = true;
+                _uow.Tenants.Update(tenant);
+                await _uow.SaveChangesAsync(ct);
+            }
+
+            _logger.LogInformation("SuperAdmin retried webhook for tenant {Id}", tenantId);
+            await SendAsync(chatId, $"✅ وب‌هوک برای <b>{tenant.TenantName}</b> مجدداً تنظیم شد.", null, ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Webhook retry failed for tenant {Id}", tenantId);
+            await SendAsync(chatId, $"❌ تنظیم وب‌هوک ناموفق بود:\n<code>{ex.Message}</code>", null, ct);
+        }
+    }
+
+    // ── Backup Center ─────────────────────────────────────────────────────────
+
+    private async Task ShowBackupMenuAsync(long chatId, CancellationToken ct)
+    {
+        var backups = await _backupService.ListBackupsAsync();
+        var html = $"💾 <b>مرکز پشتیبان‌گیری</b>\n\n" +
+                   $"📦 تعداد فایل‌های موجود: <b>{backups.Count}</b>";
+
+        var kb = new InlineKeyboardMarkup(new[]
+        {
+            new[] { InlineKeyboardButton.WithCallbackData("🆕 ایجاد بکاپ الان", "sa:backup:trigger") },
+            new[] { InlineKeyboardButton.WithCallbackData("📋 مشاهده بکاپ‌ها",  "sa:backup:list:1") }
+        });
+
+        await SendAsync(chatId, html, kb, ct);
+    }
+
+    private async Task HandleBackupCallbackAsync(string[] parts, long chatId, int msgId, CancellationToken ct)
+    {
+        var action = parts.ElementAtOrDefault(2);
+
+        switch (action)
+        {
+            case "trigger":
+                await SendAsync(chatId, "⏳ در حال ایجاد بکاپ... این ممکن است چند دقیقه طول بکشد.", null, ct);
+                var result = await _backupService.TriggerBackupAsync(ct);
+                if (result.IsSuccess)
+                {
+                    var info = result.Data!;
+                    var sizeMb = info.SizeBytes / 1_048_576.0;
+                    await SendAsync(chatId,
+                        $"✅ بکاپ ایجاد شد!\n\n📄 فایل: <code>{info.FileName}</code>\n📦 حجم: <b>{sizeMb:F2} MB</b>",
+                        null, ct);
+                }
+                else
+                {
+                    await SendAsync(chatId, $"❌ بکاپ ناموفق:\n{result.ErrorMessage}", null, ct);
+                }
+                break;
+
+            case "list":
+                var pg = int.TryParse(parts.ElementAtOrDefault(3), out var p) ? p : 1;
+                await ShowBackupListAsync(chatId, pg, ct);
+                break;
+
+            case "download":
+                var dlFile = parts.ElementAtOrDefault(3);
+                await DownloadBackupAsync(chatId, dlFile, ct);
+                break;
+
+            case "delete":
+                var delFile = parts.ElementAtOrDefault(3);
+                await DeleteBackupAsync(chatId, delFile, ct);
+                break;
+
+            case "verify":
+                var verFile = parts.ElementAtOrDefault(3);
+                await VerifyBackupAsync(chatId, verFile, ct);
+                break;
+        }
+    }
+
+    private async Task ShowBackupListAsync(long chatId, int page, CancellationToken ct)
+    {
+        const int pageSize = 5;
+        var all   = await _backupService.ListBackupsAsync();
+        var paged = all.Skip((page - 1) * pageSize).Take(pageSize).ToList();
+
+        if (all.Count == 0)
+        {
+            await SendAsync(chatId, "💾 هیچ بکاپی یافت نشد.", null, ct);
+            return;
+        }
+
+        var sb = new StringBuilder();
+        sb.AppendLine($"💾 <b>بکاپ‌ها ({all.Count} فایل — صفحه {page})</b>\n");
+
+        var rows = new List<InlineKeyboardButton[]>();
+        foreach (var b in paged)
+        {
+            var sizeMb = b.SizeBytes / 1_048_576.0;
+            sb.AppendLine($"📄 <code>{b.FileName}</code>");
+            sb.AppendLine($"   📦 {sizeMb:F1} MB | 🗓 {b.CreatedAt:yyyy-MM-dd HH:mm}");
+            sb.AppendLine();
+
+            var safeFile = Uri.EscapeDataString(b.FileName);
+            rows.Add(new[]
+            {
+                InlineKeyboardButton.WithCallbackData("⬇️ دانلود", $"sa:backup:download:{safeFile}"),
+                InlineKeyboardButton.WithCallbackData("✔️ تأیید",  $"sa:backup:verify:{safeFile}"),
+                InlineKeyboardButton.WithCallbackData("🗑 حذف",    $"sa:backup:delete:{safeFile}")
+            });
+        }
+
+        var nav = new List<InlineKeyboardButton>();
+        if (page > 1)                    nav.Add(InlineKeyboardButton.WithCallbackData("◀️", $"sa:backup:list:{page - 1}"));
+        if (page * pageSize < all.Count) nav.Add(InlineKeyboardButton.WithCallbackData("▶️", $"sa:backup:list:{page + 1}"));
+        if (nav.Count > 0) rows.Add(nav.ToArray());
+
+        await SendAsync(chatId, sb.ToString(), new InlineKeyboardMarkup(rows), ct);
+    }
+
+    private async Task DownloadBackupAsync(long chatId, string? fileName, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(fileName)) return;
+        var decodedFile = Uri.UnescapeDataString(fileName);
+        var path = await _backupService.GetBackupFullPathAsync(decodedFile);
+        if (path is null)
+        {
+            await SendAsync(chatId, "❌ فایل بکاپ یافت نشد.", null, ct);
+            return;
+        }
+
+        var fi = new FileInfo(path);
+        if (fi.Length > 50 * 1024 * 1024)
+        {
+            await SendAsync(chatId,
+                $"⚠️ فایل بکاپ <b>{fi.Length / 1_048_576.0:F1} MB</b> است که از محدودیت ۵۰ مگابایت تلگرام بیشتر است.\n\nلطفاً مستقیماً از سرور دریافت کنید.",
+                null, ct);
+            return;
+        }
+
+        try
+        {
+            await using var stream = System.IO.File.OpenRead(path);
+            var inputFile = InputFile.FromStream(stream, fi.Name);
+            await _bot.SendDocument(chatId, inputFile,
+                caption: $"💾 {fi.Name}\n{fi.Length / 1_048_576.0:F2} MB",
+                cancellationToken: ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to send backup file {File}", decodedFile);
+            await SendAsync(chatId, $"❌ ارسال فایل ناموفق بود: {ex.Message}", null, ct);
+        }
+    }
+
+    private async Task DeleteBackupAsync(long chatId, string? fileName, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(fileName)) return;
+        var decodedFile = Uri.UnescapeDataString(fileName);
+        var result = await _backupService.DeleteBackupAsync(decodedFile);
+        await SendAsync(chatId,
+            result.IsSuccess ? $"🗑 فایل <code>{decodedFile}</code> حذف شد." : $"❌ {result.ErrorMessage}",
+            null, ct);
+    }
+
+    private async Task VerifyBackupAsync(long chatId, string? fileName, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(fileName)) return;
+        await SendAsync(chatId, "⏳ در حال تأیید صحت بکاپ...", null, ct);
+        var decodedFile = Uri.UnescapeDataString(fileName);
+        var result = await _backupService.VerifyBackupAsync(decodedFile);
+        await SendAsync(chatId,
+            result.IsSuccess
+                ? $"✅ بکاپ <code>{decodedFile}</code> سالم است."
+                : $"❌ بکاپ معتبر نیست:\n{result.ErrorMessage}",
+            null, ct);
+    }
+
+    // ── Renewal Requests ──────────────────────────────────────────────────────
+
+    private async Task ShowPendingRenewalsAsync(long chatId, CancellationToken ct)
+    {
+        var pending = (await _renewalService.GetPendingRequestsAsync()).ToList();
+
+        if (pending.Count == 0)
+        {
+            await SendAsync(chatId, "🔄 هیچ درخواست تمدیدی در انتظار بررسی نیست.", BuildMainMenuKeyboard(), ct);
+            return;
+        }
+
+        foreach (var req in pending.Take(10))
+        {
+            var tenantName = req.Tenant?.TenantName ?? $"#{req.TenantId}";
+            var typeLabel  = req.RequestType == ECommerceBot.API.Enums.RenewalRequestType.Renewal
+                ? $"تمدید {req.DurationMonths} ماهه" : "ارتقاء پلن";
+
+            var html = $"🔄 <b>درخواست {typeLabel}</b>\n\n" +
+                       $"🏢 فروشگاه: <b>{tenantName}</b>\n" +
+                       $"📅 ارسال: {req.CreatedAt:yyyy-MM-dd HH:mm}\n" +
+                       (req.ReceiptFileId != null ? "🧾 رسید پیوست شده" : "⚠️ بدون رسید");
+
+            var kb = new InlineKeyboardMarkup(new[]
+            {
+                new[]
+                {
+                    InlineKeyboardButton.WithCallbackData("✅ تأیید",  $"sa:renewal:approve:{req.Id}"),
+                    InlineKeyboardButton.WithCallbackData("❌ رد",     $"sa:renewal:reject:{req.Id}")
+                }
+            });
+
+            await SendAsync(chatId, html, kb, ct);
+
+            if (req.ReceiptFileId != null)
+            {
+                try { await _bot.ForwardMessage(chatId, chatId, 0, cancellationToken: ct); }
+                catch { /* receipt photo may not be forwardable this way */ }
+
+                // Send the receipt photo directly
+                try
+                {
+                    await _bot.SendPhoto(chatId, InputFile.FromFileId(req.ReceiptFileId), cancellationToken: ct);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Could not send receipt photo for request {Id}", req.Id);
+                }
+            }
+        }
+    }
+
+    private async Task HandleRenewalCallbackAsync(string[] parts, long chatId, CancellationToken ct)
+    {
+        var action    = parts.ElementAtOrDefault(2);
+        var requestId = int.TryParse(parts.ElementAtOrDefault(3), out var rid) ? rid : 0;
+        if (requestId == 0) return;
+
+        switch (action)
+        {
+            case "approve":
+                var approveResult = await _renewalService.ApproveAsync(requestId);
+                var req = (await _renewalService.GetByTenantIdAsync(0)).FirstOrDefault(); // placeholder — get from repo
+                await SendAsync(chatId,
+                    approveResult.IsSuccess
+                        ? $"✅ درخواست #{requestId} تأیید و اشتراک تمدید شد."
+                        : $"❌ {approveResult.ErrorMessage}",
+                    null, ct);
+
+                // Notify tenant owner if we can find their chat ID
+                var approvedReq = await _uow.RenewalRequests.GetByIdAsync(requestId);
+                if (approvedReq is not null && approveResult.IsSuccess)
+                    await NotifyTenantOwnerAsync(approvedReq.TenantId, "✅ درخواست تمدید اشتراک شما تأیید شد.", ct);
+                break;
+
+            case "reject":
+                var rejectResult = await _renewalService.RejectAsync(requestId);
+                await SendAsync(chatId,
+                    rejectResult.IsSuccess
+                        ? $"❌ درخواست #{requestId} رد شد."
+                        : $"❌ {rejectResult.ErrorMessage}",
+                    null, ct);
+
+                var rejectedReq = await _uow.RenewalRequests.GetByIdAsync(requestId);
+                if (rejectedReq is not null && rejectResult.IsSuccess)
+                    await NotifyTenantOwnerAsync(rejectedReq.TenantId, "❌ درخواست تمدید اشتراک شما رد شد. لطفاً با پشتیبانی تماس بگیرید.", ct);
+                break;
+        }
+    }
+
+    private async Task NotifyTenantOwnerAsync(int tenantId, string message, CancellationToken ct)
+    {
+        var tenant = await _uow.Tenants.GetByIdAsync(tenantId);
+        if (tenant?.OwnerTelegramId is null) return;
+
+        try
+        {
+            var decryptedToken = _aes.Decrypt(tenant.BotTokenEncrypted);
+            var tenantClient = new TelegramBotClient(decryptedToken);
+            await tenantClient.SendMessage(tenant.OwnerTelegramId.Value, message,
+                parseMode: ParseMode.Html, cancellationToken: ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to notify tenant owner for tenant {Id}", tenantId);
+        }
     }
 
     // ── Impersonate ───────────────────────────────────────────────────────────
@@ -534,9 +1303,7 @@ public class SuperAdminHandler : ISuperAdminHandler
         var tenant = await _uow.Tenants.GetBySlugAsync(slug);
         if (tenant is null)
         {
-            await SendAsync(chatId,
-                $"❌ مشتری با شناسه <code>{slug}</code> یافت نشد.",
-                BuildMainMenuKeyboard(), ct);
+            await SendAsync(chatId, $"❌ مشتری با شناسه <code>{slug}</code> یافت نشد.", BuildMainMenuKeyboard(), ct);
             return;
         }
 
@@ -544,8 +1311,7 @@ public class SuperAdminHandler : ISuperAdminHandler
                    $"🔗 Slug: <code>{tenant.TenantSlug}</code>\n" +
                    $"📊 وضعیت: {GetStatusLabel(tenant.Status)}\n" +
                    (tenant.BotUsername != null ? $"🤖 بات: @{tenant.BotUsername}\n" : "") +
-                   "\n<i>برای ورود به پنل ادمین این مشتری، از طریق بات آن‌ها /start بزنید.\n" +
-                   "قابلیت جعل هویت مستقیم در نسخه بعدی اضافه می‌شود.</i>";
+                   "\n<i>برای ورود به پنل ادمین این مشتری، از طریق بات آن‌ها /start بزنید.</i>";
 
         var kb = new InlineKeyboardMarkup(new[]
         {
@@ -578,14 +1344,23 @@ public class SuperAdminHandler : ISuperAdminHandler
     private static ReplyKeyboardMarkup BuildMainMenuKeyboard() =>
         new(new[]
         {
-            new[] { new KeyboardButton(BtnDashboard), new KeyboardButton(BtnTenants) },
-            new[] { new KeyboardButton(BtnAddTenant),  new KeyboardButton(BtnPlans) },
-            new[] { new KeyboardButton(BtnImpersonate) }
+            new[] { new KeyboardButton(BtnDashboard),   new KeyboardButton(BtnTenants)   },
+            new[] { new KeyboardButton(BtnAddTenant),   new KeyboardButton(BtnPlans)      },
+            new[] { new KeyboardButton(BtnImpersonate), new KeyboardButton(BtnHealth)     },
+            new[] { new KeyboardButton(BtnBackup),      new KeyboardButton(BtnRenewals)   }
         })
         { ResizeKeyboard = true };
 
     private static ReplyKeyboardMarkup BuildCancelKeyboard() =>
         new(BtnCancel) { ResizeKeyboard = true };
+
+    private static ReplyKeyboardMarkup BuildSkipCancelKeyboard() =>
+        new(new[]
+        {
+            new[] { new KeyboardButton(BtnSkip) },
+            new[] { new KeyboardButton(BtnCancel) }
+        })
+        { ResizeKeyboard = true };
 
     private static string GetStatusLabel(TenantStatus status) => status switch
     {
