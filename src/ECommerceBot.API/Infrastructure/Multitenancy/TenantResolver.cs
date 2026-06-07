@@ -22,4 +22,9 @@ public class TenantResolver : ITenantResolver
         await _context.Tenants
             .AsNoTracking()
             .FirstOrDefaultAsync(t => t.Id == tenantId && t.IsActive, ct);
+
+    public async Task<Tenant?> FindBySlugAsync(string slug, CancellationToken ct = default) =>
+        await _context.Tenants
+            .AsNoTracking()
+            .FirstOrDefaultAsync(t => t.TenantSlug == slug, ct);
 }

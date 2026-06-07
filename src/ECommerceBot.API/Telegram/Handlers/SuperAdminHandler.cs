@@ -257,8 +257,9 @@ public class SuperAdminHandler : ISuperAdminHandler
                 TenantStatus.Expired      => "❌",
                 _                         => "❓"
             };
-            var label = $"{icon} {t.TenantName}";
-            if (t.BotUsername != null) label += $" (@{t.BotUsername})";
+            var label   = $"{icon} {t.TenantName}";
+            var botUser = NormalizeBotUsername(t.BotUsername);
+            if (botUser != null) label += $" (@{botUser})";
             rows.Add(new[] { InlineKeyboardButton.WithCallbackData(label, $"sa:tenant:{t.Id}") });
         }
 
@@ -330,6 +331,14 @@ public class SuperAdminHandler : ISuperAdminHandler
                 await RetryWebhookAsync(chatId, tenantId, ct);
                 break;
 
+            case "diagnose":
+                await ShowWebhookDiagnosticsAsync(chatId, tenantId, ct);
+                break;
+
+            case "technical":
+                await ShowTechnicalDetailsAsync(chatId, tenantId, ct);
+                break;
+
             default:
                 await ShowTenantDetailAsync(chatId, tenantId, ct);
                 break;
@@ -341,55 +350,245 @@ public class SuperAdminHandler : ISuperAdminHandler
         var tenant = await _uow.Tenants.GetByIdAsync(tenantId);
         if (tenant is null) return;
 
-        var expiry = tenant.ExpiresAt.HasValue
-            ? tenant.ExpiresAt.Value.ToString("yyyy-MM-dd")
-            : "♾ بدون انقضا";
-
-        var daysLeft = tenant.ExpiresAt.HasValue
-            ? (int)(tenant.ExpiresAt.Value - DateTime.UtcNow).TotalDays
-            : (int?)null;
-
-        var notes = (await _uow.TenantNotes.GetByTenantIdAsync(tenantId)).ToList();
+        var notes  = (await _uow.TenantNotes.GetByTenantIdAsync(tenantId)).ToList();
         var health = _botHealth.GetStatus(tenantId);
+        var botUser = NormalizeBotUsername(tenant.BotUsername);
+
+        // ── expiry line ──
+        string expiryLine;
+        if (tenant.ExpiresAt.HasValue)
+        {
+            var daysLeft = (int)(tenant.ExpiresAt.Value - DateTime.UtcNow).TotalDays;
+            var urgency  = daysLeft <= 3 ? "‼️" : daysLeft <= 7 ? "⚠️" : "⏰";
+            expiryLine = $"{urgency} انقضا: <b>{tenant.ExpiresAt.Value:yyyy-MM-dd}</b> ({daysLeft} روز)";
+        }
+        else
+        {
+            expiryLine = "⏰ انقضا: ♾ بدون انقضا";
+        }
+
+        // ── health / webhook line ──
+        string healthLine;
+        if (health is null)
+        {
+            healthLine = "📶 سلامت: ⏳ هنوز بررسی نشده";
+        }
+        else if (!health.IsOnline)
+        {
+            healthLine = "📶 سلامت: 🔴 آفلاین (توکن نامعتبر یا تلگرام در دسترس نیست)";
+        }
+        else if (health.WebhookChecked && !string.IsNullOrEmpty(health.WebhookLastError))
+        {
+            healthLine = $"📶 سلامت: 🟡 آنلاین ولی وب‌هوک خطا دارد\n" +
+                         $"   ❗ <i>{health.WebhookLastError}</i>";
+        }
+        else if (health.WebhookChecked && string.IsNullOrEmpty(health.WebhookUrl))
+        {
+            healthLine = "📶 سلامت: 🟡 آنلاین ولی وب‌هوک ثبت نشده";
+        }
+        else
+        {
+            healthLine = $"📶 سلامت: 🟢 آنلاین{(health.PendingUpdateCount > 0 ? $" ({health.PendingUpdateCount} آپدیت در صف)" : "")}";
+        }
 
         var sb = new StringBuilder();
-        sb.AppendLine($"🏢 <b>{tenant.TenantName}</b>");
-        if (tenant.IsTrial) sb.AppendLine("🧪 <i>آزمایشی</i>");
-        sb.AppendLine($"🔗 Slug: <code>{tenant.TenantSlug}</code>");
+        sb.AppendLine($"🏢 <b>{tenant.TenantName}</b>{(tenant.IsTrial ? "  🧪 <i>آزمایشی</i>" : "")}");
         sb.AppendLine($"📊 وضعیت: {GetStatusLabel(tenant.Status)}");
+        if (botUser != null) sb.AppendLine($"🤖 ربات: @{botUser}");
+        sb.AppendLine(healthLine);
+        sb.AppendLine();
         if (tenant.CustomerName  != null) sb.AppendLine($"👤 مشتری: {tenant.CustomerName}");
         if (tenant.CustomerPhone != null) sb.AppendLine($"📞 تلفن: {tenant.CustomerPhone}");
         if (tenant.CustomerEmail != null) sb.AppendLine($"📧 ایمیل: {tenant.CustomerEmail}");
-        if (tenant.BotUsername   != null) sb.AppendLine($"🤖 بات: @{tenant.BotUsername}");
-        if (health is not null) sb.AppendLine($"📶 سلامت بات: {(health.IsOnline ? "🟢 آنلاین" : "🔴 آفلاین")}");
-        sb.AppendLine($"⏰ انقضا: {expiry}");
-        if (daysLeft.HasValue) sb.AppendLine($"📅 روز باقی‌مانده: <b>{daysLeft}</b>");
-        sb.AppendLine($"👥 کاربر: {tenant.MaxUsers} | 📦 محصول: {tenant.MaxProducts} | 👑 ادمین: {tenant.MaxAdmins}");
+        sb.AppendLine();
+        sb.AppendLine(expiryLine);
+        sb.AppendLine($"📦 محدودیت‌ها: {tenant.MaxUsers} کاربر | {tenant.MaxProducts} محصول | {tenant.MaxAdmins} ادمین");
+        if (notes.Count > 0) sb.AppendLine($"📝 یادداشت: {notes.Count} مورد");
         if (tenant.Status == TenantStatus.Suspended && tenant.SuspendedReason != null)
         {
+            sb.AppendLine();
             sb.AppendLine($"🚫 دلیل تعلیق: <i>{tenant.SuspendedReason}</i>");
             if (tenant.SuspendedAt.HasValue)
-                sb.AppendLine($"📅 تاریخ تعلیق: {tenant.SuspendedAt.Value:yyyy-MM-dd HH:mm}");
+                sb.AppendLine($"📅 تعلیق در: {tenant.SuspendedAt.Value:yyyy-MM-dd HH:mm}");
         }
-        sb.AppendLine($"📝 یادداشت: {notes.Count} مورد");
-        sb.AppendLine($"🗓 ایجاد: {tenant.CreatedAt:yyyy-MM-dd}");
 
         var rows = new List<InlineKeyboardButton[]>();
 
+        // ── status actions ──
+        var actionRow = new List<InlineKeyboardButton>();
         if (tenant.Status != TenantStatus.Suspended && tenant.Status != TenantStatus.Disabled)
-            rows.Add(new[] { InlineKeyboardButton.WithCallbackData("🚫 تعلیق", $"sa:tenant:{tenantId}:suspend") });
+            actionRow.Add(InlineKeyboardButton.WithCallbackData("🚫 تعلیق", $"sa:tenant:{tenantId}:suspend"));
         if (tenant.Status != TenantStatus.Active)
-            rows.Add(new[] { InlineKeyboardButton.WithCallbackData("✅ فعال‌سازی", $"sa:tenant:{tenantId}:activate") });
+            actionRow.Add(InlineKeyboardButton.WithCallbackData("✅ فعال‌سازی", $"sa:tenant:{tenantId}:activate"));
+        if (actionRow.Count > 0) rows.Add(actionRow.ToArray());
 
         rows.Add(new[]
         {
-            InlineKeyboardButton.WithCallbackData("📋 تغییر پلن", $"sa:tenant:{tenantId}:plans"),
+            InlineKeyboardButton.WithCallbackData("📋 تغییر پلن",   $"sa:tenant:{tenantId}:plans"),
             InlineKeyboardButton.WithCallbackData("📝 یادداشت‌ها", $"sa:tenant:{tenantId}:notes")
         });
-        rows.Add(new[] { InlineKeyboardButton.WithCallbackData("🔄 تنظیم وب‌هوک", $"sa:tenant:{tenantId}:webhook") });
-        rows.Add(new[] { InlineKeyboardButton.WithCallbackData("⬅️ بازگشت", "sa:tenants:page:1") });
+        rows.Add(new[]
+        {
+            InlineKeyboardButton.WithCallbackData("🔄 تنظیم وب‌هوک", $"sa:tenant:{tenantId}:webhook"),
+            InlineKeyboardButton.WithCallbackData("🔍 بررسی وبهوک",  $"sa:tenant:{tenantId}:diagnose")
+        });
+
+        // ── open / test bot buttons (URL buttons, only if username known) ──
+        if (botUser != null)
+        {
+            rows.Add(new[]
+            {
+                InlineKeyboardButton.WithUrl("🤖 باز کردن ربات مشتری", $"https://t.me/{botUser}"),
+                InlineKeyboardButton.WithUrl("🧪 تست ربات مشتری",       $"https://t.me/{botUser}?start=test")
+            });
+        }
+
+        rows.Add(new[]
+        {
+            InlineKeyboardButton.WithCallbackData("🔧 جزئیات فنی", $"sa:tenant:{tenantId}:technical"),
+            InlineKeyboardButton.WithCallbackData("⬅️ بازگشت",     "sa:tenants:page:1")
+        });
 
         await SendAsync(chatId, sb.ToString(), new InlineKeyboardMarkup(rows), ct);
+    }
+
+    private async Task ShowTechnicalDetailsAsync(long chatId, int tenantId, CancellationToken ct)
+    {
+        var tenant = await _uow.Tenants.GetByIdAsync(tenantId);
+        if (tenant is null) return;
+
+        var expectedUrl = !string.IsNullOrWhiteSpace(_opts.WebhookBaseUrl)
+            ? $"{_opts.WebhookBaseUrl.TrimEnd('/')}/api/telegram/{tenant.TenantSlug}/webhook"
+            : "(WebhookBaseUrl تنظیم نشده)";
+
+        var sb = new StringBuilder();
+        sb.AppendLine($"🔧 <b>جزئیات فنی — {tenant.TenantName}</b>");
+        sb.AppendLine();
+        sb.AppendLine($"🔗 Slug: <code>{tenant.TenantSlug}</code>");
+        sb.AppendLine($"🆔 شناسه: #{tenant.Id}");
+        sb.AppendLine($"🔑 IsActive: {(tenant.IsActive ? "✅ فعال" : "❌ غیرفعال")}");
+        sb.AppendLine($"🔐 Secret وب‌هوک: {(string.IsNullOrEmpty(tenant.WebhookSecret) ? "❌ تنظیم نشده" : "✅ تنظیم شده")}");
+        sb.AppendLine($"📡 آدرس وب‌هوک مورد انتظار:");
+        sb.AppendLine($"<code>{expectedUrl}</code>");
+        sb.AppendLine($"🗓 تاریخ ایجاد: {tenant.CreatedAt:yyyy-MM-dd HH:mm}");
+
+        var kb = new InlineKeyboardMarkup(new[]
+        {
+            new[] { InlineKeyboardButton.WithCallbackData("⬅️ بازگشت به مشتری", $"sa:tenant:{tenantId}") }
+        });
+        await SendAsync(chatId, sb.ToString(), kb, ct);
+    }
+
+    // ── Webhook Diagnostics ───────────────────────────────────────────────────
+
+    private async Task ShowWebhookDiagnosticsAsync(long chatId, int tenantId, CancellationToken ct)
+    {
+        var tenant = await _uow.Tenants.GetByIdAsync(tenantId);
+        if (tenant is null) { await SendAsync(chatId, "❌ مشتری یافت نشد.", null, ct); return; }
+
+        await SendAsync(chatId, "🔍 در حال بررسی وب‌هوک...", null, ct);
+
+        var botUser    = NormalizeBotUsername(tenant.BotUsername);
+        var expectedUrl = !string.IsNullOrWhiteSpace(_opts.WebhookBaseUrl)
+            ? $"{_opts.WebhookBaseUrl.TrimEnd('/')}/api/telegram/{tenant.TenantSlug}/webhook"
+            : null;
+
+        string? actualUrl       = null;
+        string? lastError       = null;
+        int     pendingCount    = 0;
+        bool    tokenValid      = false;
+        string? tokenError      = null;
+        string? fetchedUsername = botUser;
+
+        try
+        {
+            var decryptedToken = _aes.Decrypt(tenant.BotTokenEncrypted);
+            var client         = new TelegramBotClient(decryptedToken);
+
+            var me = await client.GetMe(ct);
+            tokenValid      = true;
+            fetchedUsername = me.Username;
+
+            var webhookInfo = await client.GetWebhookInfo(ct);
+            actualUrl    = webhookInfo.Url;
+            lastError    = webhookInfo.LastErrorMessage;
+            pendingCount = webhookInfo.PendingUpdateCount;
+        }
+        catch (Exception ex)
+        {
+            tokenError = ex.Message;
+        }
+
+        var urlMatch = expectedUrl != null && actualUrl != null &&
+                       string.Equals(expectedUrl, actualUrl, StringComparison.OrdinalIgnoreCase);
+
+        var sb = new StringBuilder();
+        sb.AppendLine("🔍 <b>گزارش تشخیص وب‌هوک</b>");
+        sb.AppendLine("━━━━━━━━━━━━━━━━━━━━━━━━");
+        sb.AppendLine();
+        sb.AppendLine($"🏢 فروشگاه: <b>{tenant.TenantName}</b>");
+        sb.AppendLine($"📊 وضعیت دیتابیس: {GetStatusLabel(tenant.Status)}");
+        sb.AppendLine($"🔑 IsActive: {(tenant.IsActive ? "✅ فعال" : "❌ غیرفعال — ربات پاسخ نمی‌دهد!")}");
+        if (fetchedUsername != null) sb.AppendLine($"🤖 ربات: @{fetchedUsername}");
+        sb.AppendLine();
+
+        // token check
+        sb.AppendLine(tokenValid
+            ? "🔐 توکن ربات: ✅ معتبر"
+            : $"🔐 توکن ربات: ❌ خطا — <i>{tokenError}</i>");
+        sb.AppendLine();
+
+        // webhook URL comparison
+        sb.AppendLine("📡 <b>آدرس وب‌هوک:</b>");
+        sb.AppendLine($"• مورد انتظار:");
+        sb.AppendLine($"  <code>{expectedUrl ?? "(WebhookBaseUrl تنظیم نشده)"}</code>");
+        sb.AppendLine($"• ثبت‌شده در تلگرام:");
+        sb.AppendLine($"  <code>{(string.IsNullOrEmpty(actualUrl) ? "(ثبت نشده)" : actualUrl)}</code>");
+
+        if (expectedUrl is null)
+            sb.AppendLine("⚠️ نتیجه: WebhookBaseUrl در تنظیمات سرور خالی است");
+        else if (string.IsNullOrEmpty(actualUrl))
+            sb.AppendLine("❌ نتیجه: وب‌هوک در تلگرام ثبت نشده — دکمه «تنظیم وب‌هوک» را بزنید");
+        else if (urlMatch)
+            sb.AppendLine("✅ نتیجه: آدرس‌ها یکسان هستند");
+        else
+            sb.AppendLine("❌ نتیجه: آدرس‌ها مغایرت دارند — دکمه «تنظیم وب‌هوک» را بزنید");
+
+        sb.AppendLine();
+        sb.AppendLine($"🔐 Secret: {(string.IsNullOrEmpty(tenant.WebhookSecret) ? "❌ تنظیم نشده" : "✅ تنظیم شده")}");
+        sb.AppendLine($"⏳ آپدیت‌های در صف: {pendingCount}");
+
+        if (!string.IsNullOrEmpty(lastError))
+        {
+            sb.AppendLine();
+            sb.AppendLine($"❗ آخرین خطای تلگرام:");
+            sb.AppendLine($"<i>{lastError}</i>");
+        }
+
+        // Recommendation
+        sb.AppendLine();
+        sb.AppendLine("━━━━━━━━━━━━━━━━━━━━━━━━");
+        if (!tenant.IsActive)
+            sb.AppendLine("🔧 <b>راه‌حل:</b> دکمه «تنظیم وب‌هوک» را بزنید تا IsActive هم فعال شود.");
+        else if (!tokenValid)
+            sb.AppendLine("🔧 <b>راه‌حل:</b> توکن ربات نامعتبر است. از پنل مشتری توکن را بررسی کنید.");
+        else if (string.IsNullOrEmpty(actualUrl) || !urlMatch)
+            sb.AppendLine("🔧 <b>راه‌حل:</b> دکمه «تنظیم وب‌هوک» را بزنید.");
+        else if (!string.IsNullOrEmpty(lastError))
+            sb.AppendLine("🔧 <b>راه‌حل:</b> خطای تلگرام را بررسی کنید. احتمالاً SSL یا DNS مشکل دارد.");
+        else
+            sb.AppendLine("✅ <b>همه چیز درست است.</b> اگر ربات هنوز جواب نمی‌دهد، چند دقیقه صبر کنید.");
+
+        var kb = new InlineKeyboardMarkup(new[]
+        {
+            new[]
+            {
+                InlineKeyboardButton.WithCallbackData("🔄 تنظیم مجدد وب‌هوک", $"sa:tenant:{tenantId}:webhook"),
+                InlineKeyboardButton.WithCallbackData("⬅️ بازگشت",             $"sa:tenant:{tenantId}")
+            }
+        });
+
+        await SendAsync(chatId, sb.ToString(), kb, ct);
     }
 
     // ── Plans ─────────────────────────────────────────────────────────────────
@@ -762,7 +961,7 @@ public class SuperAdminHandler : ISuperAdminHandler
             WebhookSecret       = webhookSecret,
             BotUsername         = botUsername,
             Status              = webhookSet ? TenantStatus.Active : TenantStatus.PendingSetup,
-            IsActive            = webhookSet,
+            IsActive            = true, // always active on creation; only suspension sets this false
             PlanId              = plan?.Id ?? 1,
             MaxUsers            = plan?.MaxUsers ?? 500,
             MaxProducts         = plan?.MaxProducts ?? 50,
@@ -927,13 +1126,16 @@ public class SuperAdminHandler : ISuperAdminHandler
 
     private async Task ShowHealthAsync(long chatId, CancellationToken ct)
     {
-        var allStatuses = _botHealth.GetAllStatuses();
-        var online  = allStatuses.Count(s => s.IsOnline);
-        var offline = allStatuses.Count(s => !s.IsOnline);
+        var allStatuses   = _botHealth.GetAllStatuses();
+        var online        = allStatuses.Count(s => s.IsOnline);
+        var offline       = allStatuses.Count(s => !s.IsOnline);
+        var webhookIssues = allStatuses.Count(s => s.IsOnline && s.WebhookChecked &&
+                                                   (!string.IsNullOrEmpty(s.WebhookLastError) || string.IsNullOrEmpty(s.WebhookUrl)));
 
         var sb = new StringBuilder();
         sb.AppendLine("📡 <b>سلامت سیستم</b>\n");
-        sb.AppendLine($"🟢 آنلاین: <b>{online}</b>  🔴 آفلاین: <b>{offline}</b>");
+        sb.AppendLine($"🟢 آنلاین: <b>{online}</b>  🔴 آفلاین: <b>{offline}</b>" +
+                      (webhookIssues > 0 ? $"  🟡 مشکل وب‌هوک: <b>{webhookIssues}</b>" : ""));
         sb.AppendLine($"📊 کل بررسی‌شده: {allStatuses.Count}");
         sb.AppendLine();
 
@@ -942,10 +1144,32 @@ public class SuperAdminHandler : ISuperAdminHandler
             sb.AppendLine("<b>وضعیت بات‌ها:</b>");
             foreach (var s in allStatuses.Take(15))
             {
-                var icon = s.IsOnline ? "🟢" : "🔴";
+                string icon;
+                string extra = string.Empty;
+                if (!s.IsOnline)
+                {
+                    icon = "🔴";
+                }
+                else if (s.WebhookChecked && !string.IsNullOrEmpty(s.WebhookLastError))
+                {
+                    icon  = "🟡";
+                    extra = $" ❗ <i>{s.WebhookLastError[..Math.Min(50, s.WebhookLastError.Length)]}</i>";
+                }
+                else if (s.WebhookChecked && string.IsNullOrEmpty(s.WebhookUrl))
+                {
+                    icon  = "🟡";
+                    extra = " ⚠️ <i>وب‌هوک ثبت نشده</i>";
+                }
+                else
+                {
+                    icon = "🟢";
+                    if (s.PendingUpdateCount > 5) extra = $" ({s.PendingUpdateCount} در صف)";
+                }
+
+                var uname = NormalizeBotUsername(s.BotUsername);
                 sb.AppendLine($"{icon} {s.TenantName}" +
-                              (s.BotUsername != null ? $" (@{s.BotUsername})" : "") +
-                              $" — <i>{s.CheckedAt:HH:mm}</i>");
+                              (uname != null ? $" (@{uname})" : "") +
+                              $" — <i>{s.CheckedAt:HH:mm}</i>{extra}");
             }
             if (allStatuses.Count > 15)
                 sb.AppendLine($"<i>... و {allStatuses.Count - 15} مورد دیگر</i>");
@@ -960,10 +1184,14 @@ public class SuperAdminHandler : ISuperAdminHandler
             new[] { InlineKeyboardButton.WithCallbackData("🔄 بروزرسانی", "sa:health:refresh") }
         };
 
-        if (offline > 0)
+        // Quick-fix buttons for offline or webhook-broken bots
+        var needsAttention = allStatuses
+            .Where(s => !s.IsOnline || (s.WebhookChecked && (!string.IsNullOrEmpty(s.WebhookLastError) || string.IsNullOrEmpty(s.WebhookUrl))))
+            .Take(5);
+        foreach (var s in needsAttention)
         {
-            foreach (var s in allStatuses.Where(x => !x.IsOnline).Take(5))
-                rows.Add(new[] { InlineKeyboardButton.WithCallbackData($"🔄 تنظیم وب‌هوک @{s.BotUsername ?? s.TenantName}", $"sa:health:retry:{s.TenantId}") });
+            var uname = NormalizeBotUsername(s.BotUsername) ?? s.TenantName;
+            rows.Add(new[] { InlineKeyboardButton.WithCallbackData($"🔄 تنظیم وب‌هوک @{uname}", $"sa:health:retry:{s.TenantId}") });
         }
 
         await SendAsync(chatId, sb.ToString(), new InlineKeyboardMarkup(rows), ct);
@@ -1002,10 +1230,12 @@ public class SuperAdminHandler : ISuperAdminHandler
             var webhookUrl = $"{_opts.WebhookBaseUrl.TrimEnd('/')}/api/telegram/{tenant.TenantSlug}/webhook";
             await client.SetWebhook(webhookUrl, secretToken: tenant.WebhookSecret, cancellationToken: ct);
 
-            if (tenant.Status == TenantStatus.PendingSetup)
+            // Ensure tenant is active after a successful webhook setup regardless of prior status
+            var changed = false;
+            if (tenant.Status == TenantStatus.PendingSetup) { tenant.Status = TenantStatus.Active; changed = true; }
+            if (!tenant.IsActive) { tenant.IsActive = true; changed = true; }
+            if (changed)
             {
-                tenant.Status   = TenantStatus.Active;
-                tenant.IsActive = true;
                 _uow.Tenants.Update(tenant);
                 await _uow.SaveChangesAsync(ct);
             }
@@ -1418,6 +1648,10 @@ public class SuperAdminHandler : ISuperAdminHandler
     }
 
     private static string B(bool v) => v ? "✅" : "❌";
+
+    /// <summary>Strips any leading or trailing @ from a stored bot username so callers can safely prepend @ once.</summary>
+    private static string? NormalizeBotUsername(string? username) =>
+        string.IsNullOrWhiteSpace(username) ? null : username.Trim().Trim('@');
 
     // ── MemoryCache conversation state ────────────────────────────────────────
 

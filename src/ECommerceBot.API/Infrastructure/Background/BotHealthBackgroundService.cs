@@ -80,7 +80,26 @@ public class BotHealthBackgroundService : BackgroundService, IBotHealthService
         {
             var client = new TelegramBotClient(token);
             var me = await client.GetMe(ct);
-            SetStatus(tenantId, tenantName, true, me.Username);
+
+            string? webhookUrl = null;
+            string? webhookLastError = null;
+            int pendingCount = 0;
+            bool webhookChecked = false;
+            try
+            {
+                var info = await client.GetWebhookInfo(ct);
+                webhookUrl = info.Url;
+                webhookLastError = info.LastErrorMessage;
+                pendingCount = info.PendingUpdateCount;
+                webhookChecked = true;
+            }
+            catch (Exception wex)
+            {
+                _logger.LogDebug(wex, "GetWebhookInfo failed for tenant {TenantId}", tenantId);
+            }
+
+            SetStatus(tenantId, tenantName, true, me.Username,
+                webhookUrl, webhookLastError, pendingCount, webhookChecked);
         }
         catch (Exception ex)
         {
@@ -89,12 +108,15 @@ public class BotHealthBackgroundService : BackgroundService, IBotHealthService
         }
     }
 
-    private void SetStatus(int tenantId, string tenantName, bool isOnline, string? username)
+    private void SetStatus(int tenantId, string tenantName, bool isOnline, string? username,
+        string? webhookUrl = null, string? webhookLastError = null, int pendingCount = 0, bool webhookChecked = false)
     {
         _lock.Wait();
         try
         {
-            _statuses[tenantId] = new BotHealthStatus(tenantId, tenantName, isOnline, username, DateTime.UtcNow);
+            _statuses[tenantId] = new BotHealthStatus(
+                tenantId, tenantName, isOnline, username, DateTime.UtcNow,
+                webhookUrl, webhookLastError, pendingCount, webhookChecked);
         }
         finally
         {

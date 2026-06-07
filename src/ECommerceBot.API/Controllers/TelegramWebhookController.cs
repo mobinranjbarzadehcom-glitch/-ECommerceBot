@@ -59,7 +59,15 @@ public class TelegramWebhookController : ControllerBase
 
         if (tenant is null)
         {
-            _logger.LogWarning("Webhook received for unknown tenant slug: {Slug}", tenantSlug);
+            // Distinguish between "slug not found" and "slug found but IsActive=false"
+            var anyTenant = await resolver.FindBySlugAsync(tenantSlug, ct);
+            if (anyTenant is not null)
+                _logger.LogWarning(
+                    "Webhook for INACTIVE tenant slug {Slug} — Status={Status} IsActive={IsActive}. " +
+                    "Use SuperAdmin panel to activate or retry webhook.",
+                    tenantSlug, anyTenant.Status, anyTenant.IsActive);
+            else
+                _logger.LogWarning("Webhook received for unknown tenant slug: {Slug}", tenantSlug);
             return NotFound();
         }
 
